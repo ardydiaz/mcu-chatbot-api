@@ -1,7 +1,7 @@
 CREATE DATABASE IF NOT EXISTS mcu_chatbot;
 USE mcu_chatbot;
 
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE IF NOT EXISTS api_account (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(120) NOT NULL,
   email VARCHAR(160) NOT NULL UNIQUE,
@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS documents (
   uploaded_by INT NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_documents_uploaded_by
-    FOREIGN KEY (uploaded_by) REFERENCES users(id)
+    FOREIGN KEY (uploaded_by) REFERENCES api_account(id)
     ON DELETE CASCADE
 );
 
@@ -51,6 +51,6 @@ CREATE TABLE IF NOT EXISTS chat_logs (
   response TEXT NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_chat_logs_user
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    FOREIGN KEY (user_id) REFERENCES api_account(id)
     ON DELETE SET NULL
 );

@@ -29,7 +29,7 @@ async function listDocuments(req, res, next) {
     const [documents] = await pool.execute(
       `SELECT d.id, d.title, d.file_path, d.created_at, u.name AS uploaded_by
        FROM documents d
-       JOIN users u ON u.id = d.uploaded_by
+       JOIN api_account u ON u.id = d.uploaded_by
        ORDER BY d.created_at DESC`
     );
 

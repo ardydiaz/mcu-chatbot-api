@@ -1,9 +1,98 @@
 const express = require('express');
-const { register, login } = require('../controllers/authController');
+const { register, login, microsoftLogin } = require('../controllers/authController');
 
 const router = express.Router();
 
+/**
+ * @swagger
+ * /api/auth/register:
+ *   post:
+ *     summary: Register a new user
+ *     tags:
+ *       - Auth
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - email
+ *               - password
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 example: Admin User
+ *               email:
+ *                 type: string
+ *                 example: adminmcu@mcu.edu.ph
+ *               password:
+ *                 type: string
+ *                 example: adminmcu@#*11
+ *               role:
+ *                 type: string
+ *                 enum: [admin]
+ *                 example: admin
+ *     responses:
+ *       201:
+ *         description: User registered successfully
+ */
 router.post('/register', register);
+
+/**
+ * @swagger
+ * /api/auth/login:
+ *   post:
+ *     summary: Login user
+ *     tags:
+ *       - Auth
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - password
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 example: adminmcu@mcu.edu.ph
+ *               password:
+ *                 type: string
+ *                 example: adminmcu@#*11
+ *     responses:
+ *       200:
+ *         description: Login successful
+ */
 router.post('/login', login);
+
+/**
+ * @swagger
+ * /api/auth/microsoft:
+ *   post:
+ *     summary: Login or register using Microsoft 365 SSO
+ *     tags:
+ *       - Auth
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - idToken
+ *             properties:
+ *               idToken:
+ *                 type: string
+ *                 description: Microsoft Entra ID token from MSAL React
+ *                 example: eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIs...
+ *     responses:
+ *       200:
+ *         description: Microsoft login successful
+ */
+router.post('/microsoft', microsoftLogin);
 
 module.exports = router;

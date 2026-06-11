@@ -47,11 +47,37 @@ npm run dev
 
 ## Main API Routes
 
+- `GET /api-docs`
 - `POST /api/auth/register`
 - `POST /api/auth/login`
+- `POST /api/auth/microsoft`
 - `GET /api/documents`
 - `POST /api/documents/upload`
 - `POST /api/chat/ask`
+
+## Microsoft 365 SSO
+
+Set these values in `.env` from your Microsoft Entra app registration:
+
+```env
+MICROSOFT_TENANT_ID=your-tenant-id
+MICROSOFT_CLIENT_ID=your-react-app-client-id
+MICROSOFT_ALLOWED_DOMAIN=mcu.edu.ph
+```
+
+React signs in with MSAL, then sends the Microsoft `idToken` to:
+
+```http
+POST /api/auth/microsoft
+```
+
+```json
+{
+  "idToken": "microsoft-id-token-here"
+}
+```
+
+The API validates the Microsoft token, creates or finds an `api_account`, and returns the normal API JWT.
 
 `POST /api/documents/upload` expects multipart form data:
 

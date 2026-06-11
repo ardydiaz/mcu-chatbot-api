@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../utils/db');
 const { jwtSecret, jwtExpiresIn } = require('../config/env');
+const { loginWithMicrosoft } = require('../services/microsoftAuthService');
 
 function signUser(user) {
   return jwt.sign(
@@ -26,7 +27,7 @@ async function register(req, res, next) {
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const [result] = await pool.execute(
-      'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)',
+      'INSERT INTO api_account (name, email, password, role) VALUES (?, ?, ?, ?)',
       [name, email, hashedPassword, role]
     );
 
@@ -53,10 +54,10 @@ async function login(req, res, next) {
       return res.status(400).json({ message: 'Email and password are required.' });
     }
 
-    const [rows] = await pool.execute('SELECT * FROM users WHERE email = ? LIMIT 1', [email]);
+    const [rows] = await pool.execute('SELECT * FROM api_account WHERE email = ? LIMIT 1', [email]);
     const user = rows[0];
 
-    if (!user || !(await bcrypt.compare(password, user.password))) {
+    if (!user || !user.password || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ message: 'Invalid email or password.' });
     }
 
@@ -76,7 +77,23 @@ async function login(req, res, next) {
   }
 }
 
+async function microsoftLogin(req, res, next) {
+  try {
+    const { idToken } = req.body;
+
+    if (!idToken) {
+      return res.status(400).json({ message: 'Microsoft idToken is required.' });
+    }
+
+    const result = await loginWithMicrosoft(idToken);
+    return res.json(result);
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   register,
-  login
+  login,
+  microsoftLogin
 };
