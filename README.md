@@ -63,6 +63,7 @@ Set these values in `.env` from your Microsoft Entra app registration:
 MICROSOFT_TENANT_ID=your-tenant-id
 MICROSOFT_CLIENT_ID=your-react-app-client-id
 MICROSOFT_ALLOWED_DOMAIN=mcu.edu.ph
+MICROSOFT_ADMIN_EMAILS=adminmcu@mcu.edu.ph
 ```
 
 React signs in with MSAL, then sends the Microsoft `idToken` to:
@@ -78,6 +79,7 @@ POST /api/auth/microsoft
 ```
 
 The API validates the Microsoft token, creates or finds an `api_account`, and returns the normal API JWT.
+New Microsoft users are created as `student` unless their email is listed in `MICROSOFT_ADMIN_EMAILS`.
 
 `POST /api/documents/upload` expects multipart form data:
 

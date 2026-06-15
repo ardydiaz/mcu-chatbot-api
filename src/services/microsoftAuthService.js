@@ -1,4 +1,3 @@
-const bcrypt = require('bcryptjs');
 const pool = require('../utils/db');
 const {
   jwtSecret,
@@ -66,36 +65,45 @@ function signApiUser(user) {
   );
 }
 
-async function findOrCreateMicrosoftAccount(profile) {
-  const [rows] = await pool.execute('SELECT * FROM api_account WHERE email = ? LIMIT 1', [profile.email]);
+async function findOrCreateMicrosoftUser(profile) {
+  const [rows] = await pool.execute(
+    'SELECT * FROM users WHERE microsoft_id = ? OR email = ? LIMIT 1',
+    [profile.microsoftId, profile.email]
+  );
   const existingUser = rows[0];
 
   if (existingUser) {
+    if (existingUser.role !== 'admin' || existingUser.microsoft_id !== profile.microsoftId) {
+      await pool.execute(
+        'UPDATE users SET name = ?, email = ?, microsoft_id = ?, role = ? WHERE id = ?',
+        [profile.name, profile.email, profile.microsoftId, 'admin', existingUser.id]
+      );
+    }
+
     return {
       id: existingUser.id,
-      name: existingUser.name,
-      email: existingUser.email,
-      role: existingUser.role
+      name: profile.name,
+      email: profile.email,
+      role: 'admin'
     };
   }
 
-  const disabledPassword = await bcrypt.hash(`microsoft-sso:${profile.microsoftId}:${Date.now()}`, 10);
   const [result] = await pool.execute(
-    'INSERT INTO api_account (name, email, password, role) VALUES (?, ?, ?, ?)',
-    [profile.name, profile.email, disabledPassword, 'student']
+    'INSERT INTO users (name, email, microsoft_id, role) VALUES (?, ?, ?, ?)',
+    [profile.name, profile.email, profile.microsoftId, 'admin']
   );
 
   return {
     id: result.insertId,
     name: profile.name,
     email: profile.email,
-    role: 'student'
+    role: 'admin'
   };
 }
 
 async function loginWithMicrosoft(idToken) {
   const profile = await verifyMicrosoftIdToken(idToken);
-  const user = await findOrCreateMicrosoftAccount(profile);
+  const user = await findOrCreateMicrosoftUser(profile);
 
   return {
     user,
