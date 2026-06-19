@@ -2,6 +2,31 @@ const pool = require('../utils/db');
 const { extractTextByPage } = require('../utils/pdfParser');
 const { extractImages } = require('../utils/imageExtractor');
 
+async function processImagesForDocument({ documentId, filePath, pageCount }) {
+  let savedImages = 0;
+  const extractionResult = await extractImages(filePath, documentId, pageCount, {
+    async onImage(image) {
+      await pool.execute(
+        `INSERT INTO document_images (document_id, image_path, page_number)
+         SELECT ?, ?, ?
+         WHERE NOT EXISTS (
+           SELECT 1
+           FROM document_images
+           WHERE document_id = ? AND page_number = ?
+         )`,
+        [documentId, image.imagePath, image.pageNumber, documentId, image.pageNumber]
+      );
+      savedImages += 1;
+    }
+  });
+  const { images, failedPages } = extractionResult;
+
+  return {
+    images: savedImages || images.length,
+    failedPages: failedPages.length
+  };
+}
+
 async function processPdf({ title, filePath, uploadedBy }) {
   const connection = await pool.getConnection();
   let documentId;
@@ -33,43 +58,33 @@ async function processPdf({ title, filePath, uploadedBy }) {
     connection.release();
   }
 
-  let images = [];
-  let failedPages = [];
-  let imageExtractionError = null;
-
-  try {
-    const extractionResult = await extractImages(filePath, documentId, pages.length);
-    images = extractionResult.images;
-    failedPages = extractionResult.failedPages;
-
-    for (const image of images) {
-      await pool.execute(
-        'INSERT INTO document_images (document_id, image_path, page_number) VALUES (?, ?, ?)',
-        [documentId, image.imagePath, image.pageNumber]
-      );
-    }
-  } catch (error) {
-    imageExtractionError = error.message || 'PDF image extraction failed.';
-  }
-
-  const failedPageWarning = failedPages.length > 0
-    ? `${failedPages.length} page image(s) failed to convert. ${failedPages
-      .slice(0, 3)
-      .map((page) => `Page ${page.pageNumber}: ${page.message}`)
-      .join(' ')}`
-    : null;
+  setImmediate(() => {
+    processImagesForDocument({
+      documentId,
+      filePath,
+      pageCount: pages.length
+    })
+      .then((result) => {
+        console.log(
+          `Document ${documentId} image extraction complete: ${result.images} saved, ${result.failedPages} failed.`
+        );
+      })
+      .catch((error) => {
+        console.error(`Document ${documentId} image extraction failed:`, error.message);
+      });
+  });
 
   return {
     id: documentId,
     title,
     pages: pages.length,
-    images: images.length,
-    warning: imageExtractionError || failedPageWarning
-      ? `PDF text was saved. ${imageExtractionError || failedPageWarning}`
-      : null
+    images: 0,
+    imagesProcessing: true,
+    warning: 'PDF text was saved. Image extraction is running in the background.'
   };
 }
 
 module.exports = {
-  processPdf
+  processPdf,
+  processImagesForDocument
 };

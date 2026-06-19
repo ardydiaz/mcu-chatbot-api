@@ -27,9 +27,12 @@ async function uploadDocument(req, res, next) {
 async function listDocuments(req, res, next) {
   try {
     const [documents] = await pool.execute(
-      `SELECT d.id, d.title, d.file_path, d.created_at, u.name AS uploaded_by
+      `SELECT d.id, d.title, d.file_path, d.created_at, u.name AS uploaded_by,
+              COUNT(di.id) AS image_count
        FROM documents d
        JOIN api_account u ON u.id = d.uploaded_by
+       LEFT JOIN document_images di ON di.document_id = d.id
+       GROUP BY d.id, d.title, d.file_path, d.created_at, u.name
        ORDER BY d.created_at DESC`
     );
 

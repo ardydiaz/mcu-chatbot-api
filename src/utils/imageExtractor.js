@@ -34,12 +34,13 @@ async function convertWithPdf2pic(filePath, documentImageDir, pageNumber) {
   return page.path;
 }
 
-async function extractImages(filePath, documentId, pageCount) {
+async function extractImages(filePath, documentId, pageCount, options = {}) {
   const documentImageDir = path.join(imageDir, String(documentId));
   await fs.mkdir(documentImageDir, { recursive: true });
 
   const images = [];
   const failedPages = [];
+  const onImage = options.onImage;
 
   for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
     try {
@@ -55,6 +56,10 @@ async function extractImages(filePath, documentId, pageCount) {
         pageNumber,
         imagePath: path.relative(path.resolve(__dirname, '..', '..'), imagePath)
       });
+
+      if (onImage) {
+        await onImage(images[images.length - 1]);
+      }
     } catch (error) {
       failedPages.push({
         pageNumber,
