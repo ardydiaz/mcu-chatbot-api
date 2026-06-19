@@ -15,14 +15,26 @@ const storage = multer.diskStorage({
   }
 });
 
-const uploadPdf = multer({
+const allowedExtensions = new Set(['.pdf', '.doc', '.docx', '.txt']);
+const allowedMimeTypes = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain'
+]);
+
+const uploadDocumentFile = multer({
   storage,
   limits: {
     fileSize: uploadMaxFileSizeMb * 1024 * 1024
   },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype !== 'application/pdf') {
-      return cb(new Error('Only PDF files are allowed.'));
+    const extension = path.extname(file.originalname).toLowerCase();
+
+    if (!allowedExtensions.has(extension) && !allowedMimeTypes.has(file.mimetype)) {
+      const error = new Error('Only PDF, Word, and text files are allowed.');
+      error.status = 400;
+      return cb(error);
     }
 
     return cb(null, true);
@@ -30,5 +42,5 @@ const uploadPdf = multer({
 });
 
 module.exports = {
-  uploadPdf
+  uploadDocumentFile
 };

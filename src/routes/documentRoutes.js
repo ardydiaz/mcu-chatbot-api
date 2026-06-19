@@ -1,7 +1,7 @@
 const express = require('express');
-const { uploadDocument, listDocuments } = require('../controllers/documentController');
+const { getDocument, uploadDocument, listDocuments } = require('../controllers/documentController');
 const { authenticate, requireAdmin } = require('../middleware/authMiddleware');
-const { uploadPdf } = require('../middleware/uploadMiddleware');
+const { uploadDocumentFile } = require('../middleware/uploadMiddleware');
 
 const router = express.Router();
 
@@ -22,9 +22,35 @@ router.get('/', authenticate, listDocuments);
 
 /**
  * @swagger
+ * /api/documents/{id}:
+ *   get:
+ *     summary: View uploaded document details and extracted content
+ *     tags:
+ *       - Documents
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         example: 36
+ *     responses:
+ *       200:
+ *         description: Document details with extracted text and images
+ *       401:
+ *         description: Authorization token is required
+ *       404:
+ *         description: Document was not found
+ */
+router.get('/:id', authenticate, getDocument);
+
+/**
+ * @swagger
  * /api/documents/upload:
  *   post:
- *     summary: Upload and process a PDF document
+ *     summary: Upload and process a PDF, Word, or text document
  *     tags:
  *       - Documents
  *     security:
@@ -38,9 +64,10 @@ router.get('/', authenticate, listDocuments);
  *             required:
  *               - pdf
  *             properties:
- *               pdf:
+ *               file:
  *                 type: string
  *                 format: binary
+ *                 description: PDF, DOC, DOCX, or TXT file
  *               title:
  *                 type: string
  *                 example: DPCManual
@@ -48,6 +75,15 @@ router.get('/', authenticate, listDocuments);
  *       201:
  *         description: Document uploaded and processed
  */
-router.post('/upload', authenticate, requireAdmin, uploadPdf.single('pdf'), uploadDocument);
+router.post(
+  '/upload',
+  authenticate,
+  requireAdmin,
+  uploadDocumentFile.fields([
+    { name: 'pdf', maxCount: 1 },
+    { name: 'file', maxCount: 1 }
+  ]),
+  uploadDocument
+);
 
 module.exports = router;
