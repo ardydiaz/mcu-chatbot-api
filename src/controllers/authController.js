@@ -10,11 +10,32 @@ function signUser(user) {
       id: user.id,
       name: user.name,
       email: user.email,
-      role: user.role
+      role: user.role,
+      approvalStatus: user.approval_status || user.approvalStatus || null
     },
     jwtSecret,
     { expiresIn: jwtExpiresIn }
   );
+}
+
+function isApprovalRequired(user) {
+  return user.role === 'admin' && user.approval_status !== undefined;
+}
+
+function respondIfNotApproved(user, res) {
+  if (!isApprovalRequired(user) || user.approval_status === 'approved') {
+    return false;
+  }
+
+  res.status(403).json({
+    code: user.approval_status === 'rejected' ? 'APPROVAL_REJECTED' : 'APPROVAL_PENDING',
+    message: user.approval_status === 'rejected'
+      ? 'Your admin access request was rejected.'
+      : 'Your admin account is pending approval.',
+    approvalStatus: user.approval_status
+  });
+
+  return true;
 }
 
 async function register(req, res, next) {
@@ -31,7 +52,21 @@ async function register(req, res, next) {
       [name, email, hashedPassword, role]
     );
 
-    const user = { id: result.insertId, name, email, role };
+    const user = {
+      id: result.insertId,
+      name,
+      email,
+      role,
+      approval_status: role === 'admin' ? 'pending' : undefined
+    };
+
+    if (role === 'admin') {
+      return res.status(202).json({
+        code: 'APPROVAL_PENDING',
+        message: 'Your admin account is pending approval.',
+        user
+      });
+    }
 
     return res.status(201).json({
       user,
@@ -54,8 +89,10 @@ async function login(req, res, next) {
       return res.status(400).json({ message: 'Email and password are required.' });
     }
 
-    const [rows] = await pool.execute('SELECT * FROM api_account WHERE email = ? LIMIT 1', [email]);
-    const user = rows[0];
+    const normalizedEmail = email.toLowerCase();
+    const [apiAccountRows] = await pool.execute('SELECT * FROM api_account WHERE email = ? LIMIT 1', [normalizedEmail]);
+    const [microsoftUserRows] = await pool.execute('SELECT * FROM users WHERE email = ? LIMIT 1', [normalizedEmail]);
+    const user = apiAccountRows[0] || microsoftUserRows[0];
 
     if (!user || !user.password || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ message: 'Invalid email or password.' });
@@ -65,8 +102,13 @@ async function login(req, res, next) {
       id: user.id,
       name: user.name,
       email: user.email,
-      role: user.role
+      role: user.role,
+      approval_status: user.approval_status
     };
+
+    if (respondIfNotApproved(safeUser, res)) {
+      return;
+    }
 
     return res.json({
       user: safeUser,

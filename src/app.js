@@ -7,6 +7,7 @@ const swaggerSpec = require('./config/swagger');
 const authRoutes = require('./routes/authRoutes');
 const chatRoutes = require('./routes/chatRoutes');
 const documentRoutes = require('./routes/documentRoutes');
+const userRoutes = require('./routes/userRoutes');
 
 const app = express();
 
@@ -34,6 +35,7 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/documents', documentRoutes);
+app.use('/api/users', userRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ message: 'Route not found.' });
@@ -42,7 +44,9 @@ app.use((req, res) => {
 app.use((error, req, res, next) => {
   const status = error.status || 500;
   res.status(status).json({
-    message: error.message || 'Internal server error.'
+    code: error.code,
+    message: error.message || 'Internal server error.',
+    approvalStatus: error.approvalStatus
   });
 });
 

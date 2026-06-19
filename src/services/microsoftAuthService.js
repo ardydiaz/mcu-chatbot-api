@@ -58,7 +58,8 @@ function signApiUser(user) {
       id: user.id,
       name: user.name,
       email: user.email,
-      role: user.role
+      role: user.role,
+      approvalStatus: user.approval_status || user.approvalStatus || null
     },
     jwtSecret,
     { expiresIn: jwtExpiresIn }
@@ -84,26 +85,40 @@ async function findOrCreateMicrosoftUser(profile) {
       id: existingUser.id,
       name: profile.name,
       email: profile.email,
-      role: 'admin'
+      role: 'admin',
+      approval_status: existingUser.approval_status || 'pending'
     };
   }
 
   const [result] = await pool.execute(
-    'INSERT INTO users (name, email, microsoft_id, role) VALUES (?, ?, ?, ?)',
-    [profile.name, profile.email, profile.microsoftId, 'admin']
+    'INSERT INTO users (name, email, password, microsoft_id, role, approval_status) VALUES (?, ?, NULL, ?, ?, ?)',
+    [profile.name, profile.email, profile.microsoftId, 'admin', 'pending']
   );
 
   return {
     id: result.insertId,
     name: profile.name,
     email: profile.email,
-    role: 'admin'
+    role: 'admin',
+    approval_status: 'pending'
   };
 }
 
 async function loginWithMicrosoft(idToken) {
   const profile = await verifyMicrosoftIdToken(idToken);
   const user = await findOrCreateMicrosoftUser(profile);
+
+  if (user.approval_status !== 'approved') {
+    const error = new Error(
+      user.approval_status === 'rejected'
+        ? 'Your admin access request was rejected.'
+        : 'Your admin account is pending approval.'
+    );
+    error.status = 403;
+    error.code = user.approval_status === 'rejected' ? 'APPROVAL_REJECTED' : 'APPROVAL_PENDING';
+    error.approvalStatus = user.approval_status;
+    throw error;
+  }
 
   return {
     user,

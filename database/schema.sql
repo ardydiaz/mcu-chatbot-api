@@ -5,8 +5,12 @@ CREATE TABLE IF NOT EXISTS api_account (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(120) NOT NULL,
   email VARCHAR(160) NOT NULL UNIQUE,
-  password VARCHAR(255) NOT NULL,
+  password VARCHAR(255) NULL,
+  microsoft_id VARCHAR(120) NULL UNIQUE,
   role ENUM('student', 'admin') NOT NULL DEFAULT 'student',
+  approval_status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+  approved_at TIMESTAMP NULL,
+  approved_by INT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -14,8 +18,12 @@ CREATE TABLE IF NOT EXISTS users (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(120) NOT NULL,
   email VARCHAR(160) NOT NULL UNIQUE,
+  password VARCHAR(255) NULL,
   microsoft_id VARCHAR(120) NULL UNIQUE,
   role ENUM('student', 'admin') NOT NULL DEFAULT 'admin',
+  approval_status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+  approved_at TIMESTAMP NULL,
+  approved_by INT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

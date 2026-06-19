@@ -22,6 +22,13 @@ function requireAdmin(req, res, next) {
     return res.status(403).json({ message: 'Admin access is required.' });
   }
 
+  if (req.user?.approvalStatus !== 'approved') {
+    return res.status(403).json({
+      code: 'APPROVAL_REQUIRED',
+      message: 'Approved admin access is required.'
+    });
+  }
+
   return next();
 }
 
