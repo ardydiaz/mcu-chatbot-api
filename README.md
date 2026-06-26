@@ -45,6 +45,42 @@ Set `UPLOAD_MAX_FILE_SIZE_MB` in `.env` if your PDFs are large.
 npm run dev
 ```
 
+## Ollama RAG Answers
+
+The chat endpoint searches MySQL for matching document pages, builds a document context, and sends that context to Ollama for a natural-language answer.
+
+Install and run Ollama locally, then pull a model:
+
+```bash
+ollama serve
+ollama pull qwen3:8b
+```
+
+Configure the API in `.env`:
+
+```env
+OLLAMA_ENABLED=true
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=qwen3:8b
+OLLAMA_REQUEST_TIMEOUT_MS=30000
+```
+
+If Ollama is offline or times out, the API falls back to the older extractive document answer so the chatbot still responds.
+
+## OCR for Embedded Images
+
+DOCX embedded images and PDF page images can be OCR processed with Tesseract so text inside screenshots becomes searchable.
+
+Install Tesseract OCR, then configure:
+
+```env
+OCR_ENABLED=true
+OCR_COMMAND=tesseract
+OCR_LANGUAGE=eng
+```
+
+If Tesseract is not installed, document upload still works, but image OCR text is skipped and a warning is logged.
+
 ## Main API Routes
 
 - `GET /api-docs`

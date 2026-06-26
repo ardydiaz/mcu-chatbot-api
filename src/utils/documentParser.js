@@ -15,15 +15,314 @@ function decodeXmlEntities(value) {
     .replace(/&apos;/g, "'");
 }
 
-function xmlToText(xml) {
-  return decodeXmlEntities(
-    xml
-      .replace(/<w:tab\s*\/>/g, '\t')
-      .replace(/<\/w:p>/g, '\n')
-      .replace(/<[^>]+>/g, '')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim()
-  );
+function stripWordLayoutArtifacts(value) {
+  return value
+    .replace(/\b(?:left|right|center|margin|width|height|top|bottom)\d+\b/gi, '')
+    .replace(/\b\d{6,}\b/g, '')
+    .split('\n')
+    .map((line) => {
+      const leadingWhitespace = line.match(/^[ \t]*/)?.[0].replace(/\t/g, '  ') || '';
+      const content = line.slice(line.match(/^[ \t]*/)?.[0].length || 0).replace(/[ \t]{2,}/g, ' ');
+      return `${leadingWhitespace}${content}`.trimEnd();
+    })
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function toAlphabeticCounter(value, uppercase = false) {
+  let number = value;
+  let result = '';
+
+  while (number > 0) {
+    number -= 1;
+    result = String.fromCharCode(97 + (number % 26)) + result;
+    number = Math.floor(number / 26);
+  }
+
+  return uppercase ? result.toUpperCase() : result;
+}
+
+function toRomanCounter(value, uppercase = false) {
+  const numerals = [
+    [1000, 'm'],
+    [900, 'cm'],
+    [500, 'd'],
+    [400, 'cd'],
+    [100, 'c'],
+    [90, 'xc'],
+    [50, 'l'],
+    [40, 'xl'],
+    [10, 'x'],
+    [9, 'ix'],
+    [5, 'v'],
+    [4, 'iv'],
+    [1, 'i']
+  ];
+  let number = value;
+  let result = '';
+
+  numerals.forEach(([amount, numeral]) => {
+    while (number >= amount) {
+      result += numeral;
+      number -= amount;
+    }
+  });
+
+  return uppercase ? result.toUpperCase() : result;
+}
+
+function formatCounter(value, format) {
+  if (format === 'lowerLetter') {
+    return toAlphabeticCounter(value);
+  }
+
+  if (format === 'upperLetter') {
+    return toAlphabeticCounter(value, true);
+  }
+
+  if (format === 'lowerRoman') {
+    return toRomanCounter(value);
+  }
+
+  if (format === 'upperRoman') {
+    return toRomanCounter(value, true);
+  }
+
+  return String(value);
+}
+
+function getXmlAttribute(xml, tagName, attributeName) {
+  return xml.match(new RegExp(`<${tagName}\\b[^>]*${attributeName}="([^"]+)"`))?.[1];
+}
+
+function parseNumberingDefinitions(numberingXml) {
+  const abstractNums = new Map();
+  const nums = new Map();
+
+  if (!numberingXml) {
+    return { abstractNums, nums };
+  }
+
+  const abstractPattern = /<w:abstractNum\b[^>]*w:abstractNumId="([^"]+)"[^>]*>([\s\S]*?)<\/w:abstractNum>/g;
+  let abstractMatch;
+
+  while ((abstractMatch = abstractPattern.exec(numberingXml)) !== null) {
+    const [, abstractNumId, abstractXml] = abstractMatch;
+    const levels = new Map();
+    const levelPattern = /<w:lvl\b[^>]*w:ilvl="([^"]+)"[^>]*>([\s\S]*?)<\/w:lvl>/g;
+    let levelMatch;
+
+    while ((levelMatch = levelPattern.exec(abstractXml)) !== null) {
+      const [, level, levelXml] = levelMatch;
+
+      levels.set(level, {
+        format: getXmlAttribute(levelXml, 'w:numFmt', 'w:val') || 'decimal',
+        text: getXmlAttribute(levelXml, 'w:lvlText', 'w:val') || `%${Number(level) + 1}.`,
+        start: Number(getXmlAttribute(levelXml, 'w:start', 'w:val') || 1)
+      });
+    }
+
+    abstractNums.set(abstractNumId, levels);
+  }
+
+  const numPattern = /<w:num\b[^>]*w:numId="([^"]+)"[^>]*>([\s\S]*?)<\/w:num>/g;
+  let numMatch;
+
+  while ((numMatch = numPattern.exec(numberingXml)) !== null) {
+    const [, numId, numXml] = numMatch;
+    const abstractNumId = getXmlAttribute(numXml, 'w:abstractNumId', 'w:val');
+
+    if (abstractNumId) {
+      nums.set(numId, abstractNumId);
+    }
+  }
+
+  return { abstractNums, nums };
+}
+
+function getNumberLevelDefinition(numberingDefinitions, numId, level) {
+  const abstractNumId = numberingDefinitions.nums.get(numId);
+  const abstractNum = abstractNumId ? numberingDefinitions.abstractNums.get(abstractNumId) : null;
+
+  return abstractNum?.get(level);
+}
+
+function getNumberedParagraphPrefix(paragraphXml, numberingState, numberingDefinitions) {
+  const numId = paragraphXml.match(/<w:numId\b[^>]*w:val="([^"]+)"/)?.[1];
+  const explicitLevel = Number(paragraphXml.match(/<w:ilvl\b[^>]*w:val="([^"]+)"/)?.[1] || 0);
+  const leftIndent = Number(paragraphXml.match(/<w:ind\b[^>]*w:left="([^"]+)"/)?.[1] || 0);
+  const indentLevel = leftIndent > 0 ? Math.max(0, Math.round(leftIndent / 720) - 1) : 0;
+  const level = String(Math.max(explicitLevel, indentLevel));
+
+  if (!numId) {
+    return '';
+  }
+
+  const key = `${numId}:${level}`;
+  const levelDefinition = getNumberLevelDefinition(numberingDefinitions, numId, level);
+  const startValue = levelDefinition?.start || 1;
+  const currentValue = numberingState.has(key) ? numberingState.get(key) + 1 : startValue;
+  const currentLevel = Number(level);
+
+  [...numberingState.keys()].forEach((stateKey) => {
+    const [, stateLevel] = stateKey.split(':');
+
+    if (Number(stateLevel) > currentLevel) {
+      numberingState.delete(stateKey);
+    }
+  });
+
+  numberingState.set(key, currentValue);
+  const marker = formatCounter(currentValue, levelDefinition?.format);
+
+  return `${'  '.repeat(currentLevel)}${marker}. `;
+}
+
+function getParagraphText(paragraphXml, numberingState, numberingDefinitions) {
+  const textParts = [];
+  const tokenPattern = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>|<w:tab\s*\/>|<w:br\s*\/>/g;
+  let match;
+
+  while ((match = tokenPattern.exec(paragraphXml)) !== null) {
+    if (match[1] !== undefined) {
+      textParts.push(decodeXmlEntities(match[1]));
+      continue;
+    }
+
+    if (match[0].startsWith('<w:tab')) {
+      textParts.push('\t');
+      continue;
+    }
+
+    textParts.push('\n');
+  }
+
+  const paragraphText = textParts.join('');
+  const numberPrefix = getNumberedParagraphPrefix(paragraphXml, numberingState, numberingDefinitions);
+
+  if (!numberPrefix) {
+    return paragraphText;
+  }
+
+  if (/^\s*(?:\d+|[A-Za-z]|[ivxlcdmIVXLCDM]+)[.)]\s+/.test(paragraphText)) {
+    const indentation = numberPrefix.match(/^\s*/)?.[0] || '';
+    return `${indentation}${paragraphText.trimStart()}`;
+  }
+
+  return `${numberPrefix}${paragraphText}`;
+}
+
+function getParagraphsFromXml(xml, numberingState = new Map(), numberingDefinitions = parseNumberingDefinitions()) {
+  const paragraphs = [];
+  const paragraphPattern = /<w:p\b[^>]*>([\s\S]*?)<\/w:p>/g;
+  let match;
+
+  while ((match = paragraphPattern.exec(xml)) !== null) {
+    const paragraphText = getParagraphText(match[1], numberingState, numberingDefinitions).trimEnd();
+
+    if (paragraphText.trim()) {
+      paragraphs.push(paragraphText);
+    }
+  }
+
+  return paragraphs;
+}
+
+function formatTableCellText(cellXml, numberingState, numberingDefinitions) {
+  return getParagraphsFromXml(cellXml, numberingState, numberingDefinitions)
+    .map((paragraph) => {
+      const leadingWhitespace = paragraph.match(/^[ \t]*/)?.[0].replace(/\t/g, '  ') || '';
+      const content = paragraph.slice(paragraph.match(/^[ \t]*/)?.[0].length || 0)
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim();
+
+      return `${leadingWhitespace}${content}`.trimEnd();
+    })
+    .filter((paragraph) => paragraph.trim())
+    .join('\n');
+}
+
+function formatTableText(tableXml, numberingDefinitions) {
+  const rows = [];
+  const rowPattern = /<w:tr\b[^>]*>([\s\S]*?)<\/w:tr>/g;
+  const numberingState = new Map();
+  let rowMatch;
+
+  while ((rowMatch = rowPattern.exec(tableXml)) !== null) {
+    const cells = [];
+    const cellPattern = /<w:tc\b[^>]*>([\s\S]*?)<\/w:tc>/g;
+    let cellMatch;
+
+    while ((cellMatch = cellPattern.exec(rowMatch[1])) !== null) {
+      cells.push(formatTableCellText(cellMatch[1], numberingState, numberingDefinitions));
+    }
+
+    if (cells.some(Boolean)) {
+      rows.push(cells);
+    }
+  }
+
+  if (rows.length === 0) {
+    return '';
+  }
+
+  const headerCells = rows[0].map((cell) => cell.replace(/\n/g, ' ').trim());
+  const hasHeader = headerCells.some((cell) => /steps|modules|activities|users|erp/i.test(cell));
+  const dataRows = hasHeader ? rows.slice(1) : rows;
+
+  return dataRows
+    .map((cells) => {
+      if (!hasHeader) {
+        return cells.filter(Boolean).join('\n');
+      }
+
+      return cells
+        .map((cell, index) => {
+          const header = headerCells[index] || `Column ${index + 1}`;
+
+          if (!cell) {
+            return '';
+          }
+
+          return `${header}:\n${cell}`;
+        })
+        .filter(Boolean)
+        .join('\n');
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function xmlToText(xml, numberingDefinitions = parseNumberingDefinitions()) {
+  const blocks = [];
+  const bodyMatch = xml.match(/<w:body\b[^>]*>([\s\S]*?)<\/w:body>/);
+  const bodyXml = bodyMatch ? bodyMatch[1] : xml;
+  const blockPattern = /<w:tbl\b[^>]*>[\s\S]*?<\/w:tbl>|<w:p\b[^>]*>[\s\S]*?<\/w:p>/g;
+  const numberingState = new Map();
+  let match;
+
+  while ((match = blockPattern.exec(bodyXml)) !== null) {
+    const blockXml = match[0];
+
+    if (blockXml.startsWith('<w:tbl')) {
+      const tableText = formatTableText(blockXml, numberingDefinitions);
+
+      if (tableText) {
+        blocks.push(tableText);
+      }
+
+      continue;
+    }
+
+    const paragraphText = getParagraphsFromXml(blockXml, numberingState, numberingDefinitions).join('\n').trimEnd();
+
+    if (paragraphText.trim()) {
+      blocks.push(paragraphText);
+    }
+  }
+
+  return stripWordLayoutArtifacts(blocks.join('\n\n'));
 }
 
 function findEndOfCentralDirectory(buffer) {
@@ -78,10 +377,24 @@ async function readZipEntry(buffer, entryName) {
   throw new Error(`DOCX entry was not found: ${entryName}`);
 }
 
+async function readOptionalZipEntry(buffer, entryName) {
+  try {
+    return await readZipEntry(buffer, entryName);
+  } catch (error) {
+    if (error.message.includes('DOCX entry was not found')) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
 async function extractDocxText(filePath) {
   const buffer = await fs.readFile(filePath);
   const documentXml = await readZipEntry(buffer, 'word/document.xml');
-  const content = xmlToText(documentXml.toString('utf8'));
+  const numberingXml = await readOptionalZipEntry(buffer, 'word/numbering.xml');
+  const numberingDefinitions = parseNumberingDefinitions(numberingXml?.toString('utf8'));
+  const content = xmlToText(documentXml.toString('utf8'), numberingDefinitions);
 
   return [
     {

@@ -1,8 +1,9 @@
 const express = require('express');
-const { askQuestion } = require('../controllers/chatController');
-const { authenticate } = require('../middleware/authMiddleware');
+const { askQuestion, getTopics } = require('../controllers/chatController');
 
 const router = express.Router();
+
+router.get('/topics', getTopics);
 
 /**
  * @swagger
@@ -11,8 +12,6 @@ const router = express.Router();
  *     summary: Ask a question based on uploaded documents
  *     tags:
  *       - Chat
- *     security:
- *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -29,6 +28,6 @@ const router = express.Router();
  *       200:
  *         description: Chatbot answer with matching text, images, and sources
  */
-router.post('/ask', authenticate, askQuestion);
+router.post('/ask', askQuestion);
 
 module.exports = router;

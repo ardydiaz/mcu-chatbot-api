@@ -1,5 +1,5 @@
 const pool = require('../utils/db');
-const { searchDocuments } = require('../services/searchService');
+const { listKnowledgeTopics, searchDocuments } = require('../services/searchService');
 
 async function getChatLogUserId(user) {
   if (!user?.email) {
@@ -49,6 +49,16 @@ async function askQuestion(req, res, next) {
   }
 }
 
+async function getTopics(req, res, next) {
+  try {
+    const topicGroups = await listKnowledgeTopics();
+    return res.json({ topicGroups });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
+  getTopics,
   askQuestion
 };
