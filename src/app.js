@@ -7,6 +7,8 @@ const swaggerSpec = require('./config/swagger');
 const authRoutes = require('./routes/authRoutes');
 const chatRoutes = require('./routes/chatRoutes');
 const documentRoutes = require('./routes/documentRoutes');
+const embedOriginRoutes = require('./routes/embedOriginRoutes');
+const scopeRoutes = require('./routes/scopeRoutes');
 const userRoutes = require('./routes/userRoutes');
 
 const app = express();
@@ -36,6 +38,8 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/documents', documentRoutes);
+app.use('/api/embed-origins', embedOriginRoutes);
+app.use('/api/chatbot-scopes', scopeRoutes);
 app.use('/api/users', userRoutes);
 
 app.use((req, res) => {

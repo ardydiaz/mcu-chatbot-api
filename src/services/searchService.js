@@ -1,13 +1,47 @@
 const pool = require('../utils/db');
 const { toPublicPath } = require('./fileService');
-const { generateOfficialTextSummaryWithOllama } = require('./ollamaService');
+const {
+  generateGeneralAnswerWithOllama,
+  generateOfficialTextSummaryWithOllama
+} = require('./ollamaService');
 
 function getSearchTerms(question) {
+  const stopWords = new Set([
+    'what',
+    'the',
+    'and',
+    'for',
+    'this',
+    'that',
+    'with',
+    'about',
+    'mean',
+    'means',
+    'good',
+    'using',
+    'use',
+    'used',
+    'user',
+    'users',
+    'give',
+    'tell',
+    'please',
+    'can',
+    'could',
+    'would',
+    'should',
+    'how',
+    'why',
+    'who',
+    'where',
+    'when'
+  ]);
+
   return question
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
-    .filter((term) => term.length > 2 && !['what', 'the', 'and', 'for', 'this', 'that', 'with'].includes(term));
+    .filter((term) => term.length > 2 && !stopWords.has(term));
 }
 
 function normalizeText(value) {
@@ -116,6 +150,70 @@ function scoreMatch(match, terms) {
   const tocPenalty = /contents|\.{5,}| \d+-\d+/.test(firstLines) ? 5 : 0;
 
   return (headingHits * 5) + termHits - tocPenalty;
+}
+
+function getTermCoverage(match, terms) {
+  const searchableText = normalizeText(`${match.title || ''} ${match.content || ''}`);
+
+  return terms.filter((term) => searchableText.includes(term)).length;
+}
+
+function hasEnoughTermCoverage(match, terms) {
+  if (terms.length === 0) {
+    return false;
+  }
+
+  if (terms.length <= 1) {
+    return getTermCoverage(match, terms) >= terms.length;
+  }
+
+  return getTermCoverage(match, terms) >= Math.min(2, terms.length);
+}
+
+function buildNoOfficialMatchAnswer() {
+  return {
+    answer: 'I could not find an official uploaded document that answers this question. Please rephrase your question or contact the appropriate university office for confirmation.',
+    answerBlocks: [
+      {
+        type: 'p',
+        text: 'I could not find an official uploaded document that answers this question. Please rephrase your question or contact the appropriate university office for confirmation.'
+      }
+    ],
+    answerMode: 'no_official_document_match',
+    images: [],
+    sources: []
+  };
+}
+
+async function buildNoMatchAnswer({ question }) {
+  const generalAnswer = await generateGeneralAnswerWithOllama({ question });
+
+  if (!generalAnswer) {
+    return buildNoOfficialMatchAnswer();
+  }
+
+  const answer = [
+    'I could not find this in the uploaded official university documents, but here is a general MCU answer:',
+    '',
+    generalAnswer
+  ].join('\n');
+
+  return {
+    answer,
+    answerBlocks: [
+      {
+        type: 'p',
+        text: 'I could not find this in the uploaded official university documents, but here is a general MCU answer:'
+      },
+      {
+        type: 'p',
+        text: generalAnswer
+      }
+    ],
+    answerMode: 'general_ai',
+    images: [],
+    sources: []
+  };
 }
 
 function buildExtractiveAnswer(matches) {
@@ -384,14 +482,16 @@ function getTopicIcon(title) {
   return firstAlphaNumeric.toUpperCase();
 }
 
-async function listKnowledgeTopics() {
+async function listKnowledgeTopics({ scope = 'general' } = {}) {
   const [documents] = await pool.execute(
     `SELECT MAX(d.id) AS id, d.title, MAX(d.created_at) AS created_at,
             SUBSTRING_INDEX(GROUP_CONCAT(dt.content ORDER BY d.created_at DESC, dt.page_number ASC SEPARATOR ' '), ' ', 120) AS sample_content
      FROM documents d
      LEFT JOIN document_text dt ON dt.document_id = d.id
+     WHERE d.site_scope = ?
      GROUP BY d.title
-     ORDER BY created_at DESC`
+     ORDER BY created_at DESC`,
+    [scope]
   );
   const groups = new Map();
 
@@ -443,22 +543,38 @@ function buildHybridOfficialAnswer({ summary, officialText }) {
   return [summary, officialText].join('\n\n');
 }
 
-async function searchDocuments(question) {
+async function searchDocuments(question, { scope = 'general' } = {}) {
   const likeQuery = `%${question}%`;
   const terms = getSearchTerms(question);
   const normalizedQuestion = normalizeText(question);
   const exactSearchPhrase = getExactSearchPhrase(question);
   const exactLikeQuery = exactSearchPhrase.length > 2 ? `%${exactSearchPhrase}%` : likeQuery;
 
+  if (terms.length === 0 && exactSearchPhrase.length < 3) {
+    return {
+      answer: 'Please ask a more specific question so I can search the uploaded university documents correctly.',
+      answerBlocks: [
+        {
+          type: 'p',
+          text: 'Please ask a more specific question so I can search the uploaded university documents correctly.'
+        }
+      ],
+      answerMode: 'needs_more_detail',
+      images: [],
+      sources: []
+    };
+  }
+
   const [titleRows] = exactSearchPhrase.length > 2
     ? await pool.execute(
       `SELECT dt.document_id, dt.page_number, dt.content, d.title
        FROM document_text dt
        JOIN documents d ON d.id = dt.document_id
-       WHERE d.title LIKE ?
+       WHERE d.site_scope = ?
+         AND d.title LIKE ?
        ORDER BY dt.page_number ASC
        LIMIT 10`,
-      [exactLikeQuery]
+      [scope, exactLikeQuery]
     )
     : [[]];
 
@@ -467,9 +583,10 @@ async function searchDocuments(question) {
       `SELECT dt.document_id, dt.page_number, dt.content, d.title
        FROM document_text dt
        JOIN documents d ON d.id = dt.document_id
-       WHERE dt.content LIKE ?
+       WHERE d.site_scope = ?
+         AND dt.content LIKE ?
        LIMIT 10`,
-      [exactLikeQuery]
+      [scope, exactLikeQuery]
     )
     : [[]];
 
@@ -477,10 +594,13 @@ async function searchDocuments(question) {
     `SELECT dt.document_id, dt.page_number, dt.content, d.title
      FROM document_text dt
      JOIN documents d ON d.id = dt.document_id
-     WHERE MATCH(dt.content) AGAINST (? IN NATURAL LANGUAGE MODE)
-        OR dt.content LIKE ?
+     WHERE d.site_scope = ?
+       AND (
+         MATCH(dt.content) AGAINST (? IN NATURAL LANGUAGE MODE)
+         OR dt.content LIKE ?
+       )
      LIMIT 25`,
-    [question, likeQuery]
+    [scope, question, likeQuery]
   );
   const dedupedRows = new Map();
   [...titleRows, ...exactPhraseRows, ...broadRows].forEach((row) => {
@@ -534,6 +654,14 @@ async function searchDocuments(question) {
         dedupedMatches.set(`${match.document_id}:${match.page_number}`, match);
       });
       candidateMatches = [...dedupedMatches.values()];
+    }
+
+    if (titleMatches.length === 0 && exactMatches.length === 0 && tocPageMatches.length === 0) {
+      candidateMatches = candidateMatches.filter((match) => hasEnoughTermCoverage(match, terms));
+    }
+
+    if (candidateMatches.length === 0) {
+      return buildNoMatchAnswer({ question });
     }
 
     const rankedMatches = candidateMatches
@@ -602,24 +730,7 @@ async function searchDocuments(question) {
     };
   }
 
-  const [images] = await pool.execute(
-    `SELECT di.document_id, di.page_number, di.image_path, d.title
-     FROM document_images di
-     JOIN documents d ON d.id = di.document_id
-     ORDER BY di.created_at DESC
-     LIMIT 6`
-  );
-
-  return {
-    answer: 'No exact text answer was found. Here are related document images you can review.',
-    images: images.map((image) => ({
-      documentId: image.document_id,
-      title: image.title,
-      pageNumber: image.page_number,
-      url: `/${toPublicPath(image.image_path)}`
-    })),
-    sources: []
-  };
+  return buildNoMatchAnswer({ question });
 }
 
 module.exports = {

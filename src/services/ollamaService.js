@@ -68,6 +68,14 @@ function formatSummaryAnswer(data) {
   return cleanAnswerText(data.summary);
 }
 
+function formatGeneralAnswer(data) {
+  if (!data || typeof data !== 'object') {
+    return null;
+  }
+
+  return cleanAnswerText(data.answer);
+}
+
 function buildContext(matches) {
   return matches
     .map((match, index) => {
@@ -116,6 +124,22 @@ function buildOfficialSummaryPrompt({ question, officialText }) {
     '',
     'Official text:',
     officialText
+  ].join('\n');
+}
+
+function buildGeneralAnswerPrompt({ question }) {
+  return [
+    'You are MCU Guide in General AI Mode.',
+    'The uploaded official university documents did not contain an answer to the user question.',
+    'Answer as a helpful general AI assistant, not as an official MCU policy source.',
+    'Do not claim that the answer comes from MCU documents.',
+    'If the question asks about a university-specific fact, policy, fee, enrollment step, grade, schedule, account, office, requirement, deadline, contact detail, or current leader, answer only as general guidance and clearly recommend official confirmation.',
+    'If you are uncertain or the answer may have changed, say you cannot verify it from uploaded documents and recommend checking the official MCU website or office.',
+    'Be useful and conversational. Do not simply refuse unless the question is unsafe or impossible to answer.',
+    'Return only valid JSON with this exact shape:',
+    '{ "answer": "clear helpful answer in 2-5 sentences" }',
+    '',
+    `User question: ${question}`
   ].join('\n');
 }
 
@@ -203,7 +227,50 @@ async function generateOfficialTextSummaryWithOllama({ question, officialText })
   }
 }
 
+async function generateGeneralAnswerWithOllama({ question }) {
+  if (!ollamaEnabled || !question) {
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ollamaRequestTimeoutMs);
+
+  try {
+    const response = await fetch(new URL('/api/generate', ollamaBaseUrl), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: ollamaModel,
+        prompt: buildGeneralAnswerPrompt({ question }),
+        stream: false,
+        format: 'json',
+        options: {
+          temperature: 0.4,
+          top_p: 0.9,
+          num_predict: 450
+        }
+      }),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama responded with status ${response.status}.`);
+    }
+
+    const data = await response.json();
+    return formatGeneralAnswer(parseJsonResponse(data.response)) || cleanAnswerText(data.response);
+  } catch (error) {
+    console.warn(`Ollama general answer failed: ${error.message}`);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 module.exports = {
   generateAnswerWithOllama,
-  generateOfficialTextSummaryWithOllama
+  generateOfficialTextSummaryWithOllama,
+  generateGeneralAnswerWithOllama
 };

@@ -74,7 +74,7 @@ async function processImagesForDocument({ documentId, filePath, pageCount }) {
   };
 }
 
-async function processDocument({ title, filePath, originalName, uploadedBy }) {
+async function processDocument({ title, filePath, originalName, uploadedBy, siteScope = 'general' }) {
   const connection = await pool.getConnection();
   let documentId;
   let pages = [];
@@ -85,8 +85,8 @@ async function processDocument({ title, filePath, originalName, uploadedBy }) {
     await connection.beginTransaction();
 
     const [documentResult] = await connection.execute(
-      'INSERT INTO documents (title, file_path, uploaded_by) VALUES (?, ?, ?)',
-      [title, filePath, uploadedBy]
+      'INSERT INTO documents (title, file_path, site_scope, uploaded_by) VALUES (?, ?, ?, ?)',
+      [title, filePath, siteScope, uploadedBy]
     );
 
     documentId = documentResult.insertId;
@@ -128,6 +128,7 @@ async function processDocument({ title, filePath, originalName, uploadedBy }) {
   return {
     id: documentId,
     title,
+    siteScope,
     type: extension.replace('.', '').toUpperCase(),
     pages: pages.length,
     images: 0,

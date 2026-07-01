@@ -2,6 +2,7 @@ const path = require('path');
 const pool = require('../utils/db');
 const { processDocument } = require('../services/pdfService');
 const { toPublicPath } = require('../services/fileService');
+const { normalizeScope } = require('../services/scopeService');
 
 async function getDocumentUploaderId(user) {
   const [rows] = await pool.execute(
@@ -31,12 +32,14 @@ async function uploadDocument(req, res, next) {
     }
 
     const title = req.body.title || path.parse(uploadedFile.originalname).name;
+    const siteScope = await normalizeScope(req.body.siteScope || req.body.site_scope);
     const uploadedBy = await getDocumentUploaderId(req.user);
     const document = await processDocument({
       title,
       filePath: uploadedFile.path,
       originalName: uploadedFile.originalname,
-      uploadedBy
+      uploadedBy,
+      siteScope
     });
 
     return res.status(201).json({
@@ -52,11 +55,12 @@ async function listDocuments(req, res, next) {
   try {
     const [documents] = await pool.execute(
       `SELECT d.id, d.title, d.file_path, d.created_at, u.name AS uploaded_by,
+              d.site_scope,
               COUNT(di.id) AS image_count
        FROM documents d
        JOIN api_account u ON u.id = d.uploaded_by
        LEFT JOIN document_images di ON di.document_id = d.id
-       GROUP BY d.id, d.title, d.file_path, d.created_at, u.name
+       GROUP BY d.id, d.title, d.file_path, d.site_scope, d.created_at, u.name
        ORDER BY d.created_at DESC`
     );
 
@@ -71,12 +75,13 @@ async function getDocument(req, res, next) {
     const { id } = req.params;
     const [documentRows] = await pool.execute(
       `SELECT d.id, d.title, d.file_path, d.created_at, u.name AS uploaded_by,
+              d.site_scope,
               COUNT(di.id) AS image_count
        FROM documents d
        JOIN api_account u ON u.id = d.uploaded_by
        LEFT JOIN document_images di ON di.document_id = d.id
        WHERE d.id = ?
-       GROUP BY d.id, d.title, d.file_path, d.created_at, u.name
+       GROUP BY d.id, d.title, d.file_path, d.site_scope, d.created_at, u.name
        LIMIT 1`,
       [id]
     );
@@ -107,6 +112,7 @@ async function getDocument(req, res, next) {
         title: document.title,
         filePath: document.file_path,
         fileUrl: `/${toPublicPath(document.file_path)}`,
+        siteScope: document.site_scope,
         uploadedBy: document.uploaded_by,
         createdAt: document.created_at,
         imageCount: Number(document.image_count || 0),

@@ -16,6 +16,7 @@ module.exports = {
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
   ollamaModel: process.env.OLLAMA_MODEL || 'qwen3:8b',
   ollamaRequestTimeoutMs: Number(process.env.OLLAMA_REQUEST_TIMEOUT_MS || 30000),
+  embedScopeOrigins: process.env.EMBED_SCOPE_ORIGINS || '',
   ocrEnabled: process.env.OCR_ENABLED !== 'false',
   ocrCommand: process.env.OCR_COMMAND || 'tesseract',
   ocrLanguage: process.env.OCR_LANGUAGE || 'eng',

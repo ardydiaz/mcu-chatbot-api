@@ -1,5 +1,66 @@
 const pool = require('../utils/db');
 const { listKnowledgeTopics, searchDocuments } = require('../services/searchService');
+const { getForbiddenEmbedMessage, isAllowedEmbedOrigin } = require('../services/embedSecurityService');
+const { normalizeScope } = require('../services/scopeService');
+
+function normalizeChatMessage(message) {
+  return String(message || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getSimpleChatReply(message) {
+  const normalized = normalizeChatMessage(message);
+
+  if (/^(hi|hello|hey|good morning|good afternoon|good evening|mabuhay)$/.test(normalized)) {
+    return {
+      answer: 'Hello! I am MCU Guide. How can I help you today?',
+      answerBlocks: [
+        {
+          type: 'p',
+          text: 'Hello! I am MCU Guide. How can I help you today?'
+        }
+      ],
+      answerMode: 'greeting',
+      images: [],
+      sources: []
+    };
+  }
+
+  if (/^(thanks|thank you|thankyou|ty|okay|ok)$/.test(normalized)) {
+    return {
+      answer: 'You are welcome. I am here if you need help with university documents or student services.',
+      answerBlocks: [
+        {
+          type: 'p',
+          text: 'You are welcome. I am here if you need help with university documents or student services.'
+        }
+      ],
+      answerMode: 'small_talk',
+      images: [],
+      sources: []
+    };
+  }
+
+  if (normalized.length > 0 && normalized.length < 3) {
+    return {
+      answer: 'Please type a more specific question, such as “How do I enroll?” or “Show source page for tuition payment.”',
+      answerBlocks: [
+        {
+          type: 'p',
+          text: 'Please type a more specific question, such as “How do I enroll?” or “Show source page for tuition payment.”'
+        }
+      ],
+      answerMode: 'needs_more_detail',
+      images: [],
+      sources: []
+    };
+  }
+
+  return null;
+}
 
 async function getChatLogUserId(user) {
   if (!user?.email) {
@@ -27,12 +88,18 @@ async function getChatLogUserId(user) {
 async function askQuestion(req, res, next) {
   try {
     const { message } = req.body;
+    const scope = await normalizeScope(req.body.scope || req.query.scope);
+    const embedOrigin = req.body.embedOrigin || req.query.embedOrigin;
 
     if (!message) {
       return res.status(400).json({ message: 'Message is required.' });
     }
 
-    const result = await searchDocuments(message);
+    if (!await isAllowedEmbedOrigin(scope, embedOrigin)) {
+      return res.status(403).json({ message: getForbiddenEmbedMessage() });
+    }
+
+    const result = getSimpleChatReply(message) || await searchDocuments(message, { scope });
     const userId = await getChatLogUserId(req.user);
 
     await pool.execute(
@@ -51,7 +118,14 @@ async function askQuestion(req, res, next) {
 
 async function getTopics(req, res, next) {
   try {
-    const topicGroups = await listKnowledgeTopics();
+    const scope = await normalizeScope(req.query.scope);
+    const embedOrigin = req.query.embedOrigin;
+
+    if (!await isAllowedEmbedOrigin(scope, embedOrigin)) {
+      return res.status(403).json({ message: getForbiddenEmbedMessage(), topicGroups: [] });
+    }
+
+    const topicGroups = await listKnowledgeTopics({ scope });
     return res.json({ topicGroups });
   } catch (error) {
     return next(error);
