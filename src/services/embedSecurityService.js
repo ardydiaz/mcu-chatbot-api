@@ -1,4 +1,5 @@
 const { embedScopeOrigins } = require('../config/env');
+const crypto = require('crypto');
 const pool = require('../utils/db');
 
 const defaultScopeOrigins = {
@@ -71,11 +72,52 @@ async function getDatabaseOriginsForScope(scope) {
   }
 }
 
-async function isAllowedEmbedOrigin(scope, originValue) {
+function generateEmbedToken() {
+  return crypto.randomBytes(32).toString('base64url');
+}
+
+async function findMatchingEmbedAccess(scope, origin, embedToken) {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT id, embed_token
+       FROM embed_allowed_origins
+       WHERE site_scope = ? AND origin = ? AND is_active = 1
+       LIMIT 1`,
+      [scope, origin]
+    );
+
+    if (!rows[0]) {
+      return null;
+    }
+
+    if (!rows[0].embed_token) {
+      return { exists: true, allowed: true };
+    }
+
+    return {
+      exists: true,
+      allowed: rows[0].embed_token === String(embedToken || '')
+    };
+  } catch (error) {
+    if (error?.code === 'ER_NO_SUCH_TABLE' || error?.code === 'ER_BAD_FIELD_ERROR') {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+async function isAllowedEmbedOrigin(scope, originValue, embedToken) {
   const origin = normalizeOrigin(originValue);
 
   if (!origin) {
     return false;
+  }
+
+  const matchingAccess = await findMatchingEmbedAccess(scope, origin, embedToken);
+
+  if (matchingAccess) {
+    return matchingAccess.allowed;
   }
 
   const allowedOrigins = getAllowedOriginsForScope(scope);
@@ -91,6 +133,7 @@ function getForbiddenEmbedMessage() {
 }
 
 module.exports = {
+  generateEmbedToken,
   getForbiddenEmbedMessage,
   isAllowedEmbedOrigin,
   normalizeOrigin

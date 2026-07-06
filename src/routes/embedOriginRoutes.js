@@ -3,6 +3,7 @@ const {
   createEmbedOrigin,
   deleteEmbedOrigin,
   listEmbedOrigins,
+  regenerateEmbedToken,
   updateEmbedOrigin
 } = require('../controllers/embedOriginController');
 const { authenticate, requireAdmin } = require('../middleware/authMiddleware');
@@ -161,6 +162,35 @@ router.post('/', createEmbedOrigin);
  *         description: Website already exists for the selected scope
  */
 router.put('/:id', updateEmbedOrigin);
+
+/**
+ * @swagger
+ * /api/embed-origins/{id}/regenerate-token:
+ *   post:
+ *     summary: Regenerate embed token
+ *     description: Creates a new token for a website access record. Old copied widget codes for this record stop working.
+ *     tags:
+ *       - Embed Access
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         example: 1
+ *     responses:
+ *       200:
+ *         description: Embed token regenerated
+ *       401:
+ *         description: Authorization token is required
+ *       403:
+ *         description: Admin access is required
+ *       404:
+ *         description: Website access record was not found
+ */
+router.post('/:id/regenerate-token', regenerateEmbedToken);
 
 /**
  * @swagger

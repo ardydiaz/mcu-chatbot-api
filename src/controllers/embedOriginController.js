@@ -1,5 +1,5 @@
 const pool = require('../utils/db');
-const { normalizeOrigin } = require('../services/embedSecurityService');
+const { generateEmbedToken, normalizeOrigin } = require('../services/embedSecurityService');
 const { normalizeScope } = require('../services/scopeService');
 
 function mapOrigin(row) {
@@ -8,6 +8,7 @@ function mapOrigin(row) {
     siteScope: row.site_scope,
     origin: row.origin,
     label: row.label || '',
+    embedToken: row.embed_token || '',
     isActive: Boolean(row.is_active),
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -17,7 +18,7 @@ function mapOrigin(row) {
 async function listEmbedOrigins(req, res, next) {
   try {
     const [rows] = await pool.execute(
-      `SELECT id, site_scope, origin, label, is_active, created_at, updated_at
+      `SELECT id, site_scope, origin, label, embed_token, is_active, created_at, updated_at
        FROM embed_allowed_origins
        ORDER BY site_scope ASC, origin ASC`
     );
@@ -33,19 +34,20 @@ async function createEmbedOrigin(req, res, next) {
     const siteScope = await normalizeScope(req.body.siteScope || req.body.site_scope);
     const origin = normalizeOrigin(req.body.origin);
     const label = String(req.body.label || '').trim() || null;
+    const embedToken = generateEmbedToken();
 
     if (!origin) {
       return res.status(400).json({ message: 'Valid website origin is required.' });
     }
 
     const [result] = await pool.execute(
-      `INSERT INTO embed_allowed_origins (site_scope, origin, label, is_active)
-       VALUES (?, ?, ?, 1)`,
-      [siteScope, origin, label]
+      `INSERT INTO embed_allowed_origins (site_scope, origin, label, embed_token, is_active)
+       VALUES (?, ?, ?, ?, 1)`,
+      [siteScope, origin, label, embedToken]
     );
 
     const [rows] = await pool.execute(
-      `SELECT id, site_scope, origin, label, is_active, created_at, updated_at
+      `SELECT id, site_scope, origin, label, embed_token, is_active, created_at, updated_at
        FROM embed_allowed_origins
        WHERE id = ?`,
       [result.insertId]
@@ -85,7 +87,7 @@ async function updateEmbedOrigin(req, res, next) {
     }
 
     const [rows] = await pool.execute(
-      `SELECT id, site_scope, origin, label, is_active, created_at, updated_at
+      `SELECT id, site_scope, origin, label, embed_token, is_active, created_at, updated_at
        FROM embed_allowed_origins
        WHERE id = ?`,
       [id]
@@ -97,6 +99,34 @@ async function updateEmbedOrigin(req, res, next) {
       return res.status(409).json({ message: 'This website is already allowed for the selected scope.' });
     }
 
+    return next(error);
+  }
+}
+
+async function regenerateEmbedToken(req, res, next) {
+  try {
+    const id = Number(req.params.id);
+    const embedToken = generateEmbedToken();
+    const [result] = await pool.execute(
+      `UPDATE embed_allowed_origins
+       SET embed_token = ?
+       WHERE id = ?`,
+      [embedToken, id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Website access record was not found.' });
+    }
+
+    const [rows] = await pool.execute(
+      `SELECT id, site_scope, origin, label, embed_token, is_active, created_at, updated_at
+       FROM embed_allowed_origins
+       WHERE id = ?`,
+      [id]
+    );
+
+    return res.json({ origin: mapOrigin(rows[0]) });
+  } catch (error) {
     return next(error);
   }
 }
@@ -122,5 +152,6 @@ module.exports = {
   createEmbedOrigin,
   deleteEmbedOrigin,
   listEmbedOrigins,
+  regenerateEmbedToken,
   updateEmbedOrigin
 };

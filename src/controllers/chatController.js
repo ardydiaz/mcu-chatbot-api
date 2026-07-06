@@ -2,6 +2,7 @@ const pool = require('../utils/db');
 const { listKnowledgeTopics, searchDocuments } = require('../services/searchService');
 const { getForbiddenEmbedMessage, isAllowedEmbedOrigin } = require('../services/embedSecurityService');
 const { normalizeScope } = require('../services/scopeService');
+const { getAnnouncementReply } = require('../services/announcementService');
 
 function normalizeChatMessage(message) {
   return String(message || '')
@@ -62,6 +63,10 @@ function getSimpleChatReply(message) {
   return null;
 }
 
+function isEmbedRequest(value) {
+  return value === true || value === 'true' || value === '1' || value === 1;
+}
+
 async function getChatLogUserId(user) {
   if (!user?.email) {
     return null;
@@ -90,16 +95,20 @@ async function askQuestion(req, res, next) {
     const { message } = req.body;
     const scope = await normalizeScope(req.body.scope || req.query.scope);
     const embedOrigin = req.body.embedOrigin || req.query.embedOrigin;
+    const embedToken = req.body.embedToken || req.query.embedToken;
+    const isEmbed = isEmbedRequest(req.body.isEmbed || req.query.isEmbed);
 
     if (!message) {
       return res.status(400).json({ message: 'Message is required.' });
     }
 
-    if (!await isAllowedEmbedOrigin(scope, embedOrigin)) {
+    if (isEmbed && !await isAllowedEmbedOrigin(scope, embedOrigin, embedToken)) {
       return res.status(403).json({ message: getForbiddenEmbedMessage() });
     }
 
-    const result = getSimpleChatReply(message) || await searchDocuments(message, { scope });
+    const result = getSimpleChatReply(message)
+      || await getAnnouncementReply(message, scope)
+      || await searchDocuments(message, { scope });
     const userId = await getChatLogUserId(req.user);
 
     await pool.execute(
@@ -120,8 +129,10 @@ async function getTopics(req, res, next) {
   try {
     const scope = await normalizeScope(req.query.scope);
     const embedOrigin = req.query.embedOrigin;
+    const embedToken = req.query.embedToken;
+    const isEmbed = isEmbedRequest(req.query.isEmbed);
 
-    if (!await isAllowedEmbedOrigin(scope, embedOrigin)) {
+    if (isEmbed && !await isAllowedEmbedOrigin(scope, embedOrigin, embedToken)) {
       return res.status(403).json({ message: getForbiddenEmbedMessage(), topicGroups: [] });
     }
 
