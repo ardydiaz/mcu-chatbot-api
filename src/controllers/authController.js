@@ -47,17 +47,18 @@ async function register(req, res, next) {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
+    const approvalStatus = role === 'admin' ? 'pending' : 'approved';
     const [result] = await pool.execute(
-      'INSERT INTO api_account (name, email, password, role) VALUES (?, ?, ?, ?)',
-      [name, email, hashedPassword, role]
+      'INSERT INTO users (name, email, password, role, approval_status) VALUES (?, ?, ?, ?, ?)',
+      [name, email.toLowerCase(), hashedPassword, role, approvalStatus]
     );
 
     const user = {
       id: result.insertId,
       name,
-      email,
+      email: email.toLowerCase(),
       role,
-      approval_status: role === 'admin' ? 'pending' : undefined
+      approval_status: approvalStatus
     };
 
     if (role === 'admin') {
@@ -90,9 +91,11 @@ async function login(req, res, next) {
     }
 
     const normalizedEmail = email.toLowerCase();
-    const [apiAccountRows] = await pool.execute('SELECT * FROM api_account WHERE email = ? LIMIT 1', [normalizedEmail]);
-    const [microsoftUserRows] = await pool.execute('SELECT * FROM users WHERE email = ? LIMIT 1', [normalizedEmail]);
-    const user = apiAccountRows[0] || microsoftUserRows[0];
+    const [userRows] = await pool.execute('SELECT * FROM users WHERE email = ? LIMIT 1', [normalizedEmail]);
+    const [apiAccountRows] = userRows[0]
+      ? [[]]
+      : await pool.execute('SELECT * FROM api_account WHERE email = ? LIMIT 1', [normalizedEmail]);
+    const user = userRows[0] || apiAccountRows[0];
 
     if (!user || !user.password || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ message: 'Invalid email or password.' });

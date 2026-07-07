@@ -32,10 +32,14 @@ CREATE TABLE IF NOT EXISTS documents (
   title VARCHAR(255) NOT NULL,
   file_path VARCHAR(500) NOT NULL,
   uploaded_by INT NOT NULL,
+  uploaded_by_user_id INT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_documents_uploaded_by
     FOREIGN KEY (uploaded_by) REFERENCES api_account(id)
-    ON DELETE CASCADE
+    ON DELETE CASCADE,
+  CONSTRAINT fk_documents_uploaded_by_user
+    FOREIGN KEY (uploaded_by_user_id) REFERENCES users(id)
+    ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS document_text (
@@ -64,24 +68,10 @@ CREATE TABLE IF NOT EXISTS document_images (
 CREATE TABLE IF NOT EXISTS chat_logs (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NULL,
-  message TEXT NOT NULL,
-  response TEXT NOT NULL,
+  message LONGTEXT NOT NULL,
+  response LONGTEXT NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_chat_logs_user
     FOREIGN KEY (user_id) REFERENCES api_account(id)
     ON DELETE SET NULL
-);
-
-CREATE TABLE IF NOT EXISTS announcements (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  site_scope VARCHAR(50) NOT NULL DEFAULT 'general',
-  title VARCHAR(180) NOT NULL,
-  body TEXT NOT NULL,
-  priority ENUM('normal', 'important', 'urgent') NOT NULL DEFAULT 'normal',
-  start_date DATE NULL,
-  end_date DATE NULL,
-  is_active TINYINT(1) NOT NULL DEFAULT 1,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  INDEX idx_announcements_scope_active_dates (site_scope, is_active, start_date, end_date)
 );

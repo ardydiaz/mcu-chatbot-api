@@ -29,6 +29,23 @@ Your original structure is correct for this project. The extra `config/` and `da
 npm install
 ```
 
+### Runtime Dependencies
+
+The API depends on these local services:
+
+- **MySQL** - stores users, documents, extracted text, chat logs, website access, and admin data.
+- **Ollama** - generates chatbot answers and document summaries.
+- **Ollama embedding model** - generates vectors for Qdrant semantic search.
+- **Qdrant** - vector database used for semantic document search.
+- **Tesseract OCR** - optional, used to read text from embedded images/screenshots.
+- **Playwright Chromium** - used by the website importer to capture modal/tab/accordion content.
+
+Install Playwright browser support after `npm install`:
+
+```bash
+npx playwright install chromium
+```
+
 2. Copy environment config:
 
 ```bash
@@ -66,6 +83,58 @@ OLLAMA_REQUEST_TIMEOUT_MS=30000
 ```
 
 If Ollama is offline or times out, the API falls back to the older extractive document answer so the chatbot still responds.
+
+## Qdrant Semantic Search
+
+Qdrant improves document retrieval by matching meaning, not only exact keywords. MySQL remains the main database, while Qdrant stores document text vectors.
+
+Start Qdrant locally, then open:
+
+```text
+http://localhost:6333
+```
+
+Expected response:
+
+```json
+{"title":"qdrant - vector search engine"}
+```
+
+Pull the Ollama embedding model:
+
+```bash
+ollama pull nomic-embed-text
+```
+
+Configure `.env`:
+
+```env
+QDRANT_ENABLED=true
+QDRANT_URL=http://localhost:6333
+QDRANT_COLLECTION=mcu_knowledge_base
+QDRANT_API_KEY=
+OLLAMA_EMBED_MODEL=nomic-embed-text
+```
+
+Reindex existing uploaded documents:
+
+```bash
+npm run qdrant:reindex
+```
+
+Successful output should show chunks indexed:
+
+```text
+Qdrant reindex complete. 116 chunks indexed from 8 documents.
+```
+
+Check the collection:
+
+```text
+http://localhost:6333/collections/mcu_knowledge_base
+```
+
+`points_count` should be greater than `0`.
 
 ## OCR for Embedded Images
 

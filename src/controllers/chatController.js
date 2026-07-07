@@ -2,7 +2,7 @@ const pool = require('../utils/db');
 const { listKnowledgeTopics, searchDocuments } = require('../services/searchService');
 const { getForbiddenEmbedMessage, isAllowedEmbedOrigin } = require('../services/embedSecurityService');
 const { normalizeScope } = require('../services/scopeService');
-const { getAnnouncementReply } = require('../services/announcementService');
+const { generateConversationalAnswerWithOllama } = require('../services/ollamaService');
 
 function normalizeChatMessage(message) {
   return String(message || '')
@@ -67,6 +67,59 @@ function isEmbedRequest(value) {
   return value === true || value === 'true' || value === '1' || value === 1;
 }
 
+function sanitizeConversationContext(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((item) => ['user', 'assistant'].includes(item?.role) && item?.text)
+    .slice(-6)
+    .map((item) => ({
+      role: item.role,
+      text: String(item.text).slice(0, 2000)
+    }));
+}
+
+function isContextFollowUp(message, conversationContext) {
+  if (conversationContext.length === 0) {
+    return false;
+  }
+
+  const normalized = normalizeChatMessage(message);
+  const words = normalized.split(/\s+/).filter(Boolean);
+
+  if (words.length === 0) {
+    return false;
+  }
+
+  const hasSearchTopic = /\b(enroll|enrollment|enlistment|tuition|fee|fees|payment|scholarship|grant|admission|requirements?|schedule|subject|post\s*class|survey|address|contact|image|source|document|page)\b/.test(normalized);
+
+  if (hasSearchTopic) {
+    return false;
+  }
+
+  const hasReferenceWord = /\b(this|that|it|its|they|them|those|these|he|she|him|her|there|same|project|one)\b/.test(normalized);
+  const isShortFollowUp = words.length <= 4 && /^(yes|no|why|how|what|explain|more|continue|is|are|can|could|so|then)\b/.test(normalized);
+
+  return hasReferenceWord || isShortFollowUp;
+}
+
+function buildConversationalReply(answer) {
+  return {
+    answer,
+    answerBlocks: [
+      {
+        type: 'p',
+        text: answer
+      }
+    ],
+    answerMode: 'conversation_context',
+    images: [],
+    sources: []
+  };
+}
+
 async function getChatLogUserId(user) {
   if (!user?.email) {
     return null;
@@ -90,6 +143,17 @@ async function getChatLogUserId(user) {
   return result.insertId;
 }
 
+async function saveChatLog({ userId, message, response }) {
+  try {
+    await pool.execute(
+      'INSERT INTO chat_logs (user_id, message, response) VALUES (?, ?, ?)',
+      [userId, message, response]
+    );
+  } catch (error) {
+    console.warn('Chat log was not saved:', error.message);
+  }
+}
+
 async function askQuestion(req, res, next) {
   try {
     const { message } = req.body;
@@ -97,6 +161,7 @@ async function askQuestion(req, res, next) {
     const embedOrigin = req.body.embedOrigin || req.query.embedOrigin;
     const embedToken = req.body.embedToken || req.query.embedToken;
     const isEmbed = isEmbedRequest(req.body.isEmbed || req.query.isEmbed);
+    const conversationContext = sanitizeConversationContext(req.body.conversationContext);
 
     if (!message) {
       return res.status(400).json({ message: 'Message is required.' });
@@ -106,15 +171,15 @@ async function askQuestion(req, res, next) {
       return res.status(403).json({ message: getForbiddenEmbedMessage() });
     }
 
+    const conversationalAnswer = isContextFollowUp(message, conversationContext)
+      ? await generateConversationalAnswerWithOllama({ question: message, conversationContext })
+      : null;
     const result = getSimpleChatReply(message)
-      || await getAnnouncementReply(message, scope)
+      || (conversationalAnswer ? buildConversationalReply(conversationalAnswer) : null)
       || await searchDocuments(message, { scope });
     const userId = await getChatLogUserId(req.user);
 
-    await pool.execute(
-      'INSERT INTO chat_logs (user_id, message, response) VALUES (?, ?, ?)',
-      [userId, message, result.answer]
-    );
+    await saveChatLog({ userId, message, response: result.answer });
 
     return res.json({
       question: message,

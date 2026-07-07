@@ -4,10 +4,10 @@ const { processDocument } = require('../services/pdfService');
 const { toPublicPath } = require('../services/fileService');
 const { normalizeScope } = require('../services/scopeService');
 
-async function getDocumentUploaderId(user) {
+async function getDefaultApiAccountId() {
   const [rows] = await pool.execute(
     'SELECT id FROM api_account WHERE email = ? LIMIT 1',
-    [user.email]
+    ['api-account@mcu.local']
   );
 
   if (rows[0]) {
@@ -17,10 +17,22 @@ async function getDocumentUploaderId(user) {
   const [result] = await pool.execute(
     `INSERT INTO api_account (name, email, password, role, approval_status)
      VALUES (?, ?, NULL, ?, ?)`,
-    [user.name || user.email, user.email, user.role || 'admin', 'approved']
+    ['Default API Account', 'api-account@mcu.local', 'admin', 'approved']
   );
 
   return result.insertId;
+}
+
+async function getDocumentUploaderIds(user) {
+  const [userRows] = await pool.execute(
+    'SELECT id FROM users WHERE email = ? LIMIT 1',
+    [user.email]
+  );
+
+  return {
+    uploadedByApiAccountId: await getDefaultApiAccountId(),
+    uploadedByUserId: userRows[0]?.id || null
+  };
 }
 
 async function uploadDocument(req, res, next) {
@@ -33,12 +45,13 @@ async function uploadDocument(req, res, next) {
 
     const title = req.body.title || path.parse(uploadedFile.originalname).name;
     const siteScope = await normalizeScope(req.body.siteScope || req.body.site_scope);
-    const uploadedBy = await getDocumentUploaderId(req.user);
+    const { uploadedByApiAccountId, uploadedByUserId } = await getDocumentUploaderIds(req.user);
     const document = await processDocument({
       title,
       filePath: uploadedFile.path,
       originalName: uploadedFile.originalname,
-      uploadedBy,
+      uploadedBy: uploadedByApiAccountId,
+      uploadedByUserId,
       siteScope
     });
 
@@ -54,13 +67,15 @@ async function uploadDocument(req, res, next) {
 async function listDocuments(req, res, next) {
   try {
     const [documents] = await pool.execute(
-      `SELECT d.id, d.title, d.file_path, d.created_at, u.name AS uploaded_by,
+      `SELECT d.id, d.title, d.file_path, d.created_at,
+              COALESCE(login_user.name, api_user.name) AS uploaded_by,
               d.site_scope,
               COUNT(di.id) AS image_count
        FROM documents d
-       JOIN api_account u ON u.id = d.uploaded_by
+       LEFT JOIN users login_user ON login_user.id = d.uploaded_by_user_id
+       LEFT JOIN api_account api_user ON api_user.id = d.uploaded_by
        LEFT JOIN document_images di ON di.document_id = d.id
-       GROUP BY d.id, d.title, d.file_path, d.site_scope, d.created_at, u.name
+       GROUP BY d.id, d.title, d.file_path, d.site_scope, d.created_at, login_user.name, api_user.name
        ORDER BY d.created_at DESC`
     );
 
@@ -74,14 +89,16 @@ async function getDocument(req, res, next) {
   try {
     const { id } = req.params;
     const [documentRows] = await pool.execute(
-      `SELECT d.id, d.title, d.file_path, d.created_at, u.name AS uploaded_by,
+      `SELECT d.id, d.title, d.file_path, d.created_at,
+              COALESCE(login_user.name, api_user.name) AS uploaded_by,
               d.site_scope,
               COUNT(di.id) AS image_count
        FROM documents d
-       JOIN api_account u ON u.id = d.uploaded_by
+       LEFT JOIN users login_user ON login_user.id = d.uploaded_by_user_id
+       LEFT JOIN api_account api_user ON api_user.id = d.uploaded_by
        LEFT JOIN document_images di ON di.document_id = d.id
        WHERE d.id = ?
-       GROUP BY d.id, d.title, d.file_path, d.site_scope, d.created_at, u.name
+       GROUP BY d.id, d.title, d.file_path, d.site_scope, d.created_at, login_user.name, api_user.name
        LIMIT 1`,
       [id]
     );

@@ -1,5 +1,6 @@
 const {
   ollamaBaseUrl,
+  ollamaEmbedModel,
   ollamaModel,
   ollamaRequestTimeoutMs,
   ollamaEnabled
@@ -143,6 +144,34 @@ function buildGeneralAnswerPrompt({ question }) {
   ].join('\n');
 }
 
+function buildConversationText(conversationContext = []) {
+  return conversationContext
+    .slice(-6)
+    .map((item) => {
+      const role = item.role === 'assistant' ? 'Assistant' : 'User';
+      return `${role}: ${cleanAnswerText(item.text).slice(0, 1200)}`;
+    })
+    .join('\n\n');
+}
+
+function buildConversationalAnswerPrompt({ question, conversationContext }) {
+  return [
+    'You are MCU Guide in conversational AI mode.',
+    'Answer the latest user question using the recent conversation context.',
+    'This mode is for follow-up questions such as "this?", "what about it?", "is that the project?", or "can you explain more?".',
+    'If the recent context is about a general topic, answer naturally like a helpful AI assistant.',
+    'If the user asks for official MCU policy, fees, requirements, schedules, contact details, or current leaders, say you cannot verify it from this conversation and recommend checking official MCU documents or offices.',
+    'Do not claim that general answers come from uploaded MCU documents.',
+    'Return only valid JSON with this exact shape:',
+    '{ "answer": "clear helpful answer in 1-4 sentences" }',
+    '',
+    'Recent conversation:',
+    buildConversationText(conversationContext),
+    '',
+    `Latest user question: ${question}`
+  ].join('\n');
+}
+
 async function generateAnswerWithOllama({ question, matches }) {
   if (!ollamaEnabled || matches.length === 0) {
     return null;
@@ -227,6 +256,48 @@ async function generateOfficialTextSummaryWithOllama({ question, officialText })
   }
 }
 
+async function generateConversationalAnswerWithOllama({ question, conversationContext }) {
+  if (!ollamaEnabled || !question || !conversationContext?.length) {
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ollamaRequestTimeoutMs);
+
+  try {
+    const response = await fetch(new URL('/api/generate', ollamaBaseUrl), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: ollamaModel,
+        prompt: buildConversationalAnswerPrompt({ question, conversationContext }),
+        stream: false,
+        format: 'json',
+        options: {
+          temperature: 0.35,
+          top_p: 0.9,
+          num_predict: 350
+        }
+      }),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama responded with status ${response.status}.`);
+    }
+
+    const data = await response.json();
+    return formatGeneralAnswer(parseJsonResponse(data.response)) || cleanAnswerText(data.response);
+  } catch (error) {
+    console.warn(`Ollama conversational answer failed: ${error.message}`);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function generateGeneralAnswerWithOllama({ question }) {
   if (!ollamaEnabled || !question) {
     return null;
@@ -269,8 +340,67 @@ async function generateGeneralAnswerWithOllama({ question }) {
   }
 }
 
+async function generateEmbeddingWithOllama(text) {
+  const prompt = cleanText(text);
+
+  if (!ollamaEnabled || !prompt) {
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ollamaRequestTimeoutMs);
+
+  async function requestEmbedding(pathname, body) {
+    const response = await fetch(new URL(pathname, ollamaBaseUrl), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      throw new Error(`Ollama ${pathname} responded with status ${response.status}${errorText ? `: ${errorText}` : ''}`);
+    }
+
+    return response.json();
+  }
+
+  try {
+    let data;
+
+    try {
+      data = await requestEmbedding('/api/embed', {
+        model: ollamaEmbedModel,
+        input: prompt
+      });
+    } catch (error) {
+      if (!/status 404/.test(error.message)) {
+        throw error;
+      }
+
+      data = await requestEmbedding('/api/embeddings', {
+        model: ollamaEmbedModel,
+        prompt
+      });
+    }
+
+    const embedding = data.embedding || data.embeddings?.[0];
+    return Array.isArray(embedding) && embedding.length > 0 ? embedding : null;
+  } catch (error) {
+    console.warn(`Ollama embedding generation failed: ${error.message}`);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 module.exports = {
   generateAnswerWithOllama,
+  generateConversationalAnswerWithOllama,
+  generateEmbeddingWithOllama,
   generateOfficialTextSummaryWithOllama,
   generateGeneralAnswerWithOllama
 };

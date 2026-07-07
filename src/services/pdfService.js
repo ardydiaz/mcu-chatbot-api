@@ -3,6 +3,7 @@ const path = require('path');
 const { extractDocumentText } = require('../utils/documentParser');
 const { extractImages } = require('../utils/imageExtractor');
 const { extractTextFromImage } = require('./ocrService');
+const { indexDocumentPages } = require('./qdrantService');
 
 function buildOcrSection(pageNumber, texts) {
   const content = texts.filter(Boolean).join('\n\n').trim();
@@ -74,7 +75,14 @@ async function processImagesForDocument({ documentId, filePath, pageCount }) {
   };
 }
 
-async function processDocument({ title, filePath, originalName, uploadedBy, siteScope = 'general' }) {
+async function processDocument({
+  title,
+  filePath,
+  originalName,
+  uploadedBy,
+  uploadedByUserId = null,
+  siteScope = 'general'
+}) {
   const connection = await pool.getConnection();
   let documentId;
   let pages = [];
@@ -85,8 +93,9 @@ async function processDocument({ title, filePath, originalName, uploadedBy, site
     await connection.beginTransaction();
 
     const [documentResult] = await connection.execute(
-      'INSERT INTO documents (title, file_path, site_scope, uploaded_by) VALUES (?, ?, ?, ?)',
-      [title, filePath, siteScope, uploadedBy]
+      `INSERT INTO documents (title, file_path, site_scope, uploaded_by, uploaded_by_user_id)
+       VALUES (?, ?, ?, ?, ?)`,
+      [title, filePath, siteScope, uploadedBy, uploadedByUserId]
     );
 
     documentId = documentResult.insertId;
@@ -124,6 +133,23 @@ async function processDocument({ title, filePath, originalName, uploadedBy, site
         });
     });
   }
+
+  setImmediate(() => {
+    indexDocumentPages({
+      documentId,
+      title,
+      siteScope,
+      pages
+    })
+      .then((result) => {
+        if (result.enabled) {
+          console.log(`Document ${documentId} Qdrant indexing complete: ${result.indexed} chunks indexed.`);
+        }
+      })
+      .catch((error) => {
+        console.error(`Document ${documentId} Qdrant indexing failed:`, error.message);
+      });
+  });
 
   return {
     id: documentId,

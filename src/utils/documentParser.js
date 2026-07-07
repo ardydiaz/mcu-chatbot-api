@@ -8,11 +8,84 @@ const inflateRaw = promisify(zlib.inflateRaw);
 
 function decodeXmlEntities(value) {
   return value
+    .replace(/&#160;/g, ' ')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'");
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&#(\d+);/g, (_, code) => {
+      const numericCode = Number(code);
+
+      return Number.isFinite(numericCode) ? String.fromCharCode(numericCode) : ' ';
+    });
+}
+
+function looksLikeHtmlDocument(content) {
+  return /<!doctype html|<html\b|xmlns:o=["']urn:schemas-microsoft-com:office:office/i.test(content);
+}
+
+function decodePossiblyUtf16(buffer) {
+  if (buffer[0] === 0xff && buffer[1] === 0xfe) {
+    return buffer.toString('utf16le');
+  }
+
+  if (buffer[0] === 0xfe && buffer[1] === 0xff) {
+    return buffer.swap16().toString('utf16le');
+  }
+
+  return buffer.toString('utf8');
+}
+
+function htmlToText(html) {
+  const withoutNoise = String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<xml[\s\S]*?<\/xml>/gi, ' ')
+    .replace(/<head[\s\S]*?<\/head>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<meta[^>]*>/gi, ' ')
+    .replace(/<link[^>]*>/gi, ' ')
+    .replace(/<\/(h1|h2|h3|h4|h5|h6|p|li|div|section|article|tr)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ');
+
+  return stripWordLayoutArtifacts(
+    decodeXmlEntities(withoutNoise)
+      .split(/\r?\n/)
+      .map((line) => line.replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .filter((line) => !/^\d+\.$/.test(line))
+      .filter((line) => !isHtmlDocumentNoiseLine(line))
+      .join('\n')
+  );
+}
+
+function getHtmlBody(html) {
+  return String(html || '').match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1] || html;
+}
+
+function htmlToTextPages(html) {
+  const body = getHtmlBody(html);
+  const sections = body
+    .replace(/<\/section>\s*<section>/gi, '\n')
+    .split(/(?=<h2\b[^>]*>)/i)
+    .map((section) => htmlToText(section))
+    .filter((section) => section.length >= 80);
+
+  const pages = sections.length > 1 ? sections : [htmlToText(html)].filter(Boolean);
+
+  return pages.map((content, index) => ({
+    pageNumber: index + 1,
+    content
+  }));
+}
+
+function isHtmlDocumentNoiseLine(line) {
+  const normalized = String(line || '').toLowerCase().replace(/\s+/g, ' ').trim();
+
+  return /^(previous|next|previous slide|next slide|back to top|share this|follow us)$/i.test(normalized);
 }
 
 function stripWordLayoutArtifacts(value) {
@@ -417,6 +490,12 @@ async function extractTxtText(filePath) {
 
 async function extractDocText(filePath) {
   const buffer = await fs.readFile(filePath);
+  const textContent = decodePossiblyUtf16(buffer);
+
+  if (looksLikeHtmlDocument(textContent)) {
+    return htmlToTextPages(textContent);
+  }
+
   const asciiText = buffer
     .toString('latin1')
     .match(/[A-Za-z0-9\s.,;:!?'"()[\]{}@#$%^&*_+=/\\|-]{5,}/g)
