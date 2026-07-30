@@ -4,6 +4,14 @@ const { getForbiddenEmbedMessage, isAllowedEmbedOrigin } = require('../services/
 const { normalizeScope } = require('../services/scopeService');
 const { generateConversationalAnswerWithOllama } = require('../services/ollamaService');
 
+const MAX_CHAT_MESSAGE_LENGTH = 2000;
+
+function sanitizeQuestionInput(value) {
+  return String(value || '')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .trim();
+}
+
 function normalizeChatMessage(message) {
   return String(message || '')
     .toLowerCase()
@@ -158,7 +166,7 @@ async function saveChatLog({ userId, message, response }) {
 
 async function askQuestion(req, res, next) {
   try {
-    const { message } = req.body;
+    const message = sanitizeQuestionInput(req.body.message);
     const scope = await normalizeScope(req.body.scope || req.query.scope);
     const embedOrigin = req.body.embedOrigin || req.query.embedOrigin;
     const embedToken = req.body.embedToken || req.query.embedToken;
@@ -167,6 +175,10 @@ async function askQuestion(req, res, next) {
 
     if (!message) {
       return res.status(400).json({ message: 'Message is required.' });
+    }
+
+    if (message.length > MAX_CHAT_MESSAGE_LENGTH) {
+      return res.status(413).json({ message: `Message is too long. Please keep it under ${MAX_CHAT_MESSAGE_LENGTH} characters.` });
     }
 
     if (isEmbed && !await isAllowedEmbedOrigin(scope, embedOrigin, embedToken)) {
