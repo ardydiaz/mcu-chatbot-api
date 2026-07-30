@@ -69,6 +69,75 @@ function formatSummaryAnswer(data) {
   return cleanAnswerText(data.summary);
 }
 
+function cleanStructuredText(value, maxLength = 1200) {
+  return cleanAnswerText(value).slice(0, maxLength).trim();
+}
+
+function normalizeStructuredItems(items) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items
+    .map((item) => cleanStructuredText(item, 700))
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
+function formatStructuredOfficialAnswer(data) {
+  if (!data || typeof data !== 'object') {
+    return null;
+  }
+
+  const blocks = [];
+  const summary = cleanStructuredText(data.summary, 900);
+  const sections = Array.isArray(data.sections) ? data.sections.slice(0, 8) : [];
+
+  if (summary) {
+    blocks.push({
+      type: 'paragraph',
+      text: summary,
+      variant: 'summary'
+    });
+  }
+
+  sections.forEach((section) => {
+    if (!section || typeof section !== 'object') {
+      return;
+    }
+
+    const title = cleanStructuredText(section.title, 100);
+    const type = cleanStructuredText(section.type, 40).toLowerCase();
+    const content = cleanStructuredText(section.content, 1400);
+    const items = normalizeStructuredItems(section.items);
+
+    if (title) {
+      blocks.push({
+        type: 'heading',
+        text: title
+      });
+    }
+
+    if ((type === 'list' || items.length > 0) && items.length > 0) {
+      blocks.push({
+        type: 'list',
+        style: 'unordered',
+        items
+      });
+      return;
+    }
+
+    if (content) {
+      blocks.push({
+        type: 'paragraph',
+        text: content
+      });
+    }
+  });
+
+  return blocks.length > 0 ? blocks : null;
+}
+
 function formatGeneralAnswer(data) {
   if (!data || typeof data !== 'object') {
     return null;
@@ -124,6 +193,30 @@ function buildOfficialSummaryPrompt({ question, officialText }) {
     `Student question: ${question}`,
     '',
     'Official text:',
+    officialText
+  ].join('\n');
+}
+
+function buildStructuredOfficialPrompt({ question, officialText }) {
+  return [
+    'You are MCU Guide, a university chatbot.',
+    'Your task is to transform official extracted university document text into a clean, readable answer.',
+    'Use only the official text below. Do not invent policies, fees, dates, offices, names, requirements, or contact information.',
+    'Preserve important exact wording, button names, website links, requirements, and steps from the official text.',
+    'Do not include raw unorganized page dumps. Combine broken wrapped lines into readable sentences.',
+    'Use short sections with clear titles. Use lists for requirements, steps, qualifications, terms, statistics, or grouped facts.',
+    'If the official text contains unrelated content, ignore it.',
+    'Return only valid JSON with this exact shape:',
+    '{ "summary": "1-3 sentence direct answer", "sections": [ { "title": "Section title", "type": "paragraph", "content": "clean paragraph text", "items": [] }, { "title": "Section title", "type": "list", "content": "", "items": ["item 1", "item 2"] } ] }',
+    'Rules:',
+    '- section.type must be "paragraph" or "list".',
+    '- For list sections, put each item in items and leave content empty.',
+    '- For paragraph sections, put text in content and leave items empty.',
+    '- Do not include Markdown fences, citations, source labels, or hidden reasoning.',
+    '',
+    `Student question: ${question}`,
+    '',
+    'Official extracted text:',
     officialText
   ].join('\n');
 }
@@ -250,6 +343,51 @@ async function generateOfficialTextSummaryWithOllama({ question, officialText })
     return formatSummaryAnswer(parseJsonResponse(data.response));
   } catch (error) {
     console.warn(`Ollama official-text summary failed: ${error.message}`);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function generateStructuredOfficialAnswerWithOllama({ question, officialText }) {
+  if (!ollamaEnabled || !officialText) {
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ollamaRequestTimeoutMs);
+
+  try {
+    const response = await fetch(new URL('/api/generate', ollamaBaseUrl), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: ollamaModel,
+        prompt: buildStructuredOfficialPrompt({
+          question,
+          officialText: cleanAnswerText(officialText).slice(0, 14000)
+        }),
+        stream: false,
+        format: 'json',
+        options: {
+          temperature: 0.12,
+          top_p: 0.8,
+          num_predict: 1400
+        }
+      }),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama responded with status ${response.status}.`);
+    }
+
+    const data = await response.json();
+    return formatStructuredOfficialAnswer(parseJsonResponse(data.response));
+  } catch (error) {
+    console.warn(`Ollama structured official answer failed: ${error.message}`);
     return null;
   } finally {
     clearTimeout(timeout);
@@ -402,5 +540,6 @@ module.exports = {
   generateConversationalAnswerWithOllama,
   generateEmbeddingWithOllama,
   generateOfficialTextSummaryWithOllama,
+  generateStructuredOfficialAnswerWithOllama,
   generateGeneralAnswerWithOllama
 };

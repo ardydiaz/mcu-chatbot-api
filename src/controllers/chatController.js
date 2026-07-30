@@ -93,16 +93,18 @@ function isContextFollowUp(message, conversationContext) {
     return false;
   }
 
-  const hasSearchTopic = /\b(enroll|enrollment|enlistment|tuition|fee|fees|payment|scholarship|grant|admission|requirements?|schedule|subject|post\s*class|survey|address|contact|image|source|document|page)\b/.test(normalized);
+  const hasSearchTopic = /\b(mcu|manila central university|university|enroll|enrollment|enlistment|tuition|fee|fees|payment|scholarship|grant|admission|requirements?|schedule|subject|post\s*class|survey|address|contact|image|source|document|page|privacy|policy)\b/.test(normalized);
 
   if (hasSearchTopic) {
     return false;
   }
 
   const hasReferenceWord = /\b(this|that|it|its|they|them|those|these|he|she|him|her|there|same|project|one)\b/.test(normalized);
+  const hasArticleReference = /^(the|a|an)\b/.test(normalized) && words.length <= 6;
+  const hasContinuationWord = /\b(also|again|more|example|examples|like|such as|functionality|feature|features)\b/.test(normalized);
   const isShortFollowUp = words.length <= 4 && /^(yes|no|why|how|what|explain|more|continue|is|are|can|could|so|then)\b/.test(normalized);
 
-  return hasReferenceWord || isShortFollowUp;
+  return hasReferenceWord || hasArticleReference || hasContinuationWord || isShortFollowUp;
 }
 
 function buildConversationalReply(answer) {

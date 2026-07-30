@@ -2,7 +2,8 @@ const pool = require('../utils/db');
 const { toPublicPath } = require('./fileService');
 const {
   generateGeneralAnswerWithOllama,
-  generateOfficialTextSummaryWithOllama
+  generateOfficialTextSummaryWithOllama,
+  generateStructuredOfficialAnswerWithOllama
 } = require('./ollamaService');
 const { searchSemanticDocuments } = require('./qdrantService');
 
@@ -193,6 +194,14 @@ function detectQuestionIntent(question) {
   const normalized = normalizeText(question);
 
   return INTENT_RULES.find((rule) => rule.questionPattern.test(normalized)) || null;
+}
+
+function isLikelyGeneralTechnologyQuestion(question) {
+  const normalized = normalizeText(question);
+  const hasUniversityContext = /\b(mcu|manila central university|university|student|students|enrollment|admission|registrar|cashier|tuition|scholarship|campus|portal|office365|microsoft 365|post class|post-class)\b/.test(normalized);
+  const hasGeneralAiTopic = /\b(react|node|nodejs|node js|javascript|typescript|api|apis|crud|database|mysql|qdrant|ollama|frontend|backend|code|coding|programming|component|components|functionality|feature|features|framework|library|server|express|tailwind|css|html|facebook|google|youtube|openai|chatgpt|gemini|developer|developed|created|invented)\b/.test(normalized);
+
+  return hasGeneralAiTopic && !hasUniversityContext;
 }
 
 function isIntentTitleMatch(match, intentRule) {
@@ -863,11 +872,54 @@ function buildOfficialTextBlocks(matches) {
   return formatProcedureBlocks(blocks);
 }
 
+async function hydrateMatchesWithFullPageContent(matches) {
+  if (!matches.length) {
+    return matches;
+  }
+
+  const pageConditions = matches
+    .map(() => '(dt.document_id = ? AND dt.page_number = ?)')
+    .join(' OR ');
+  const pageParams = matches.flatMap((match) => [match.document_id, match.page_number]);
+  const [pageRows] = await pool.execute(
+    `SELECT dt.document_id, dt.page_number, dt.content, d.title
+     FROM document_text dt
+     JOIN documents d ON d.id = dt.document_id
+     WHERE ${pageConditions}`,
+    pageParams
+  );
+  const fullPageByKey = new Map(
+    pageRows.map((row) => [`${row.document_id}:${row.page_number}`, row])
+  );
+
+  return matches.map((match) => {
+    const fullPage = fullPageByKey.get(`${match.document_id}:${match.page_number}`);
+
+    if (!fullPage?.content) {
+      return match;
+    }
+
+    return addPageMetadata({
+      ...match,
+      title: fullPage.title || match.title,
+      content: fullPage.content
+    });
+  });
+}
+
 function blocksToText(blocks) {
   return blocks
     .map((block) => {
       if (block.type === 'list') {
-        return block.items.map((item, index) => `${index + 1}. ${item}`).join('\n');
+        return block.items
+          .map((item, index) => {
+            if (typeof item === 'string') {
+              return `${index + 1}. ${item}`;
+            }
+
+            return `${item.marker || index + 1}. ${item.value || ''}`.trim();
+          })
+          .join('\n');
       }
 
       return block.text;
@@ -1015,6 +1067,10 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
   const leadershipQuestion = isLeadershipQuestion(question);
   const addressQuestion = isAddressQuestion(question);
   const intentRule = detectQuestionIntent(question);
+
+  if (!intentRule && isLikelyGeneralTechnologyQuestion(question)) {
+    return buildNoMatchAnswer({ question });
+  }
 
   if (terms.length === 0 && exactSearchPhrase.length < 3) {
     return {
@@ -1200,10 +1256,11 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
       .sort((a, b) => b.score - a.score)
       .slice(0, maxRankedMatches);
 
-    const imageConditions = rankedMatches
+    const hydratedRankedMatches = await hydrateMatchesWithFullPageContent(rankedMatches);
+    const imageConditions = hydratedRankedMatches
       .map(() => '(di.document_id = ? AND di.page_number = ?)')
       .join(' OR ');
-    const imageParams = rankedMatches.flatMap((match) => [match.document_id, match.page_number]);
+    const imageParams = hydratedRankedMatches.flatMap((match) => [match.document_id, match.page_number]);
     const [pageImages] = imageConditions
       ? await pool.execute(
         `SELECT di.document_id, di.page_number, di.image_path, d.title
@@ -1214,41 +1271,53 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
       )
       : [[]];
     const rankedMatchByPage = new Map(
-      rankedMatches.map((match) => [`${match.document_id}:${match.page_number}`, match])
+      hydratedRankedMatches.map((match) => [`${match.document_id}:${match.page_number}`, match])
     );
 
-    const officialAnswer = buildOfficialTextAnswer(rankedMatches, {
+    const officialAnswer = buildOfficialTextAnswer(hydratedRankedMatches, {
       question,
       terms,
       exactSearchPhrase
     });
-    const officialSummary = await generateOfficialTextSummaryWithOllama({
+    let answerBlocks = await generateStructuredOfficialAnswerWithOllama({
       question,
       officialText: officialAnswer
     });
-    const displayOfficialAnswer = officialSummary
-      ? getConciseOfficialExcerpt(officialAnswer)
-      : getTruncatedText(officialAnswer);
-    const officialBlocks = displayOfficialAnswer.text
-      ? [{
-        type: 'preformatted',
-        text: displayOfficialAnswer.text,
-        fullText: displayOfficialAnswer.fullText,
-        isTruncated: displayOfficialAnswer.isTruncated
-      }]
-      : buildOfficialTextBlocks(rankedMatches);
-    const answerBlocks = buildHybridOfficialBlocks({
-      summary: officialSummary,
-      officialBlocks
-    });
+    let answerMode = answerBlocks
+      ? 'database_text_structured_with_ollama'
+      : 'database_text';
+
+    if (!answerBlocks) {
+      const officialSummary = await generateOfficialTextSummaryWithOllama({
+        question,
+        officialText: officialAnswer
+      });
+      const displayOfficialAnswer = officialSummary
+        ? getConciseOfficialExcerpt(officialAnswer)
+        : getTruncatedText(officialAnswer);
+      const officialBlocks = displayOfficialAnswer.text
+        ? [{
+          type: 'preformatted',
+          text: displayOfficialAnswer.text,
+          fullText: displayOfficialAnswer.fullText,
+          isTruncated: displayOfficialAnswer.isTruncated
+        }]
+        : buildOfficialTextBlocks(hydratedRankedMatches);
+
+      answerBlocks = buildHybridOfficialBlocks({
+        summary: officialSummary,
+        officialBlocks
+      });
+      answerMode = officialSummary ? 'database_text_with_ollama_summary' : 'database_text';
+    }
 
     return {
       answer: blocksToText(answerBlocks) || buildHybridOfficialAnswer({
-        summary: officialSummary,
-        officialText: displayOfficialAnswer.text || buildExtractiveAnswer(rankedMatches)
+        summary: '',
+        officialText: buildExtractiveAnswer(hydratedRankedMatches)
       }),
       answerBlocks,
-      answerMode: officialSummary ? 'database_text_with_ollama_summary' : 'database_text',
+      answerMode,
       images: pageImages.map((image) => ({
         documentId: image.document_id,
         title: image.title,
@@ -1257,7 +1326,7 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
         pageLabel: rankedMatchByPage.get(`${image.document_id}:${image.page_number}`)?.pageLabel,
         url: `/${toPublicPath(image.image_path)}`
       })),
-      sources: rankedMatches.map((match) => ({
+      sources: hydratedRankedMatches.map((match) => ({
         documentId: match.document_id,
         title: match.title,
         pageNumber: match.page_number,
