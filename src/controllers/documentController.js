@@ -4,6 +4,20 @@ const { processDocument } = require('../services/pdfService');
 const { toPublicPath } = require('../services/fileService');
 const { normalizeScope } = require('../services/scopeService');
 
+function cleanOptionalText(value, maxLength) {
+  const cleaned = String(value || '').replace(/\s+/g, ' ').trim();
+
+  return cleaned ? cleaned.slice(0, maxLength) : null;
+}
+
+function parseBooleanFlag(value, defaultValue = true) {
+  if (value === undefined || value === null || value === '') {
+    return defaultValue;
+  }
+
+  return value === true || value === 'true' || value === '1' || value === 1 || value === 'on';
+}
+
 async function getDefaultApiAccountId() {
   const [rows] = await pool.execute(
     'SELECT id FROM api_account WHERE email = ? LIMIT 1',
@@ -45,6 +59,9 @@ async function uploadDocument(req, res, next) {
 
     const title = req.body.title || path.parse(uploadedFile.originalname).name;
     const siteScope = await normalizeScope(req.body.siteScope || req.body.site_scope);
+    const topicCategory = cleanOptionalText(req.body.topicCategory || req.body.topic_category, 100);
+    const suggestedPrompt = cleanOptionalText(req.body.suggestedPrompt || req.body.suggested_prompt, 255);
+    const showAsTopic = parseBooleanFlag(req.body.showAsTopic || req.body.show_as_topic, true);
     const { uploadedByApiAccountId, uploadedByUserId } = await getDocumentUploaderIds(req.user);
     const document = await processDocument({
       title,
@@ -52,7 +69,10 @@ async function uploadDocument(req, res, next) {
       originalName: uploadedFile.originalname,
       uploadedBy: uploadedByApiAccountId,
       uploadedByUserId,
-      siteScope
+      siteScope,
+      topicCategory,
+      suggestedPrompt,
+      showAsTopic
     });
 
     return res.status(201).json({
@@ -70,12 +90,15 @@ async function listDocuments(req, res, next) {
       `SELECT d.id, d.title, d.file_path, d.created_at,
               COALESCE(login_user.name, api_user.name) AS uploaded_by,
               d.site_scope,
+              d.topic_category,
+              d.suggested_prompt,
+              d.show_as_topic,
               COUNT(di.id) AS image_count
        FROM documents d
        LEFT JOIN users login_user ON login_user.id = d.uploaded_by_user_id
        LEFT JOIN api_account api_user ON api_user.id = d.uploaded_by
        LEFT JOIN document_images di ON di.document_id = d.id
-       GROUP BY d.id, d.title, d.file_path, d.site_scope, d.created_at, login_user.name, api_user.name
+       GROUP BY d.id, d.title, d.file_path, d.site_scope, d.topic_category, d.suggested_prompt, d.show_as_topic, d.created_at, login_user.name, api_user.name
        ORDER BY d.created_at DESC`
     );
 
@@ -92,13 +115,16 @@ async function getDocument(req, res, next) {
       `SELECT d.id, d.title, d.file_path, d.created_at,
               COALESCE(login_user.name, api_user.name) AS uploaded_by,
               d.site_scope,
+              d.topic_category,
+              d.suggested_prompt,
+              d.show_as_topic,
               COUNT(di.id) AS image_count
        FROM documents d
        LEFT JOIN users login_user ON login_user.id = d.uploaded_by_user_id
        LEFT JOIN api_account api_user ON api_user.id = d.uploaded_by
        LEFT JOIN document_images di ON di.document_id = d.id
        WHERE d.id = ?
-       GROUP BY d.id, d.title, d.file_path, d.site_scope, d.created_at, login_user.name, api_user.name
+       GROUP BY d.id, d.title, d.file_path, d.site_scope, d.topic_category, d.suggested_prompt, d.show_as_topic, d.created_at, login_user.name, api_user.name
        LIMIT 1`,
       [id]
     );
@@ -130,6 +156,9 @@ async function getDocument(req, res, next) {
         filePath: document.file_path,
         fileUrl: `/${toPublicPath(document.file_path)}`,
         siteScope: document.site_scope,
+        topicCategory: document.topic_category,
+        suggestedPrompt: document.suggested_prompt,
+        showAsTopic: Boolean(document.show_as_topic),
         uploadedBy: document.uploaded_by,
         createdAt: document.created_at,
         imageCount: Number(document.image_count || 0),

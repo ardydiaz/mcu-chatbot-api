@@ -81,7 +81,10 @@ async function processDocument({
   originalName,
   uploadedBy,
   uploadedByUserId = null,
-  siteScope = 'general'
+  siteScope = 'general',
+  topicCategory = null,
+  suggestedPrompt = null,
+  showAsTopic = true
 }) {
   const connection = await pool.getConnection();
   let documentId;
@@ -93,9 +96,9 @@ async function processDocument({
     await connection.beginTransaction();
 
     const [documentResult] = await connection.execute(
-      `INSERT INTO documents (title, file_path, site_scope, uploaded_by, uploaded_by_user_id)
-       VALUES (?, ?, ?, ?, ?)`,
-      [title, filePath, siteScope, uploadedBy, uploadedByUserId]
+      `INSERT INTO documents (title, file_path, site_scope, topic_category, suggested_prompt, show_as_topic, uploaded_by, uploaded_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [title, filePath, siteScope, topicCategory, suggestedPrompt, showAsTopic ? 1 : 0, uploadedBy, uploadedByUserId]
     );
 
     documentId = documentResult.insertId;

@@ -71,6 +71,18 @@ router.get('/:id', authenticate, getDocument);
  *               title:
  *                 type: string
  *                 example: DPCManual
+ *               siteScope:
+ *                 type: string
+ *                 example: general
+ *               topicCategory:
+ *                 type: string
+ *                 example: Admissions
+ *               suggestedPrompt:
+ *                 type: string
+ *                 example: What are the admission requirements?
+ *               showAsTopic:
+ *                 type: boolean
+ *                 example: true
  *     responses:
  *       201:
  *         description: Document uploaded and processed

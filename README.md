@@ -54,7 +54,13 @@ cp .env.example .env
 
 Set `UPLOAD_MAX_FILE_SIZE_MB` in `.env` if your PDFs are large.
 
-3. Create the MySQL tables by running `database/schema.sql`.
+3. Create or update the MySQL tables:
+
+```bash
+npm run migrate
+```
+
+The migration command works like a lightweight Laravel migration runner. It creates the database if needed, runs `database/schema.sql`, records completed migrations in `schema_migrations`, and skips migrations that were already applied.
 
 4. Start the API:
 

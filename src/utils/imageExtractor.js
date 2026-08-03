@@ -2,7 +2,6 @@ const fs = require('fs/promises');
 const path = require('path');
 const zlib = require('zlib');
 const { promisify } = require('util');
-const pdfPoppler = require('pdf-poppler');
 const { fromPath } = require('pdf2pic');
 const { imageDir } = require('../config/env');
 
@@ -13,6 +12,12 @@ function getPopplerImagePath(documentImageDir, pageNumber) {
 }
 
 async function convertWithPoppler(filePath, documentImageDir, pageNumber) {
+  if (process.platform !== 'win32') {
+    throw new Error('pdf-poppler conversion is only enabled on Windows.');
+  }
+
+  const pdfPoppler = require('pdf-poppler');
+
   await pdfPoppler.convert(filePath, {
     format: 'png',
     out_dir: documentImageDir,

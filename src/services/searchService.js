@@ -963,10 +963,13 @@ function getTopicIcon(title) {
 async function listKnowledgeTopics({ scope = 'general' } = {}) {
   const [documents] = await pool.execute(
     `SELECT MAX(d.id) AS id, d.title, MAX(d.created_at) AS created_at,
+            SUBSTRING_INDEX(GROUP_CONCAT(d.topic_category ORDER BY d.created_at DESC SEPARATOR '||'), '||', 1) AS topic_category,
+            SUBSTRING_INDEX(GROUP_CONCAT(d.suggested_prompt ORDER BY d.created_at DESC SEPARATOR '||'), '||', 1) AS suggested_prompt,
             SUBSTRING_INDEX(GROUP_CONCAT(dt.content ORDER BY d.created_at DESC, dt.page_number ASC SEPARATOR ' '), ' ', 120) AS sample_content
      FROM documents d
      LEFT JOIN document_text dt ON dt.document_id = d.id
      WHERE d.site_scope = ?
+       AND d.show_as_topic = 1
      GROUP BY d.title
      ORDER BY created_at DESC`,
     [scope]
@@ -974,12 +977,12 @@ async function listKnowledgeTopics({ scope = 'general' } = {}) {
   const groups = new Map();
 
   documents.forEach((document) => {
-    const category = getTopicCategory(document);
+    const category = document.topic_category || getTopicCategory(document);
     const item = {
       id: document.id,
       icon: getTopicIcon(document.title),
       label: document.title,
-      prompt: `What is ${document.title}?`
+      prompt: document.suggested_prompt || `What is ${document.title}?`
     };
 
     if (!groups.has(category)) {

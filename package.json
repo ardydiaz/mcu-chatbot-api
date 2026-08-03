@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "nodemon --watch src --watch .env src/server.js",
     "start": "node src/server.js",
+    "migrate": "node scripts/migrate.js",
     "qdrant:reindex": "node scripts/reindexQdrant.js"
   },
   "keywords": [
