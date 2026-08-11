@@ -329,7 +329,7 @@ async function generateOfficialTextSummaryWithOllama({ question, officialText })
         options: {
           temperature: 0.1,
           top_p: 0.8,
-          num_predict: 220
+          num_predict: 120
         }
       }),
       signal: controller.signal
@@ -374,7 +374,7 @@ async function generateStructuredOfficialAnswerWithOllama({ question, officialTe
         options: {
           temperature: 0.12,
           top_p: 0.8,
-          num_predict: 1400
+          num_predict: 180
         }
       }),
       signal: controller.signal
