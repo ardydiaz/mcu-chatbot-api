@@ -16,7 +16,7 @@ module.exports = {
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
   ollamaModel: process.env.OLLAMA_MODEL || 'qwen3:8b',
   ollamaEmbedModel: process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text',
-  ollamaRequestTimeoutMs: Number(process.env.OLLAMA_REQUEST_TIMEOUT_MS || 30000),
+  ollamaRequestTimeoutMs: Number(process.env.OLLAMA_REQUEST_TIMEOUT_MS || 120000),
   qdrantEnabled: process.env.QDRANT_ENABLED === 'true',
   qdrantUrl: process.env.QDRANT_URL || 'http://localhost:6333',
   qdrantApiKey: process.env.QDRANT_API_KEY || '',
