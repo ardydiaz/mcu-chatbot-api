@@ -124,13 +124,13 @@ async function login(req, res, next) {
 
 async function microsoftLogin(req, res, next) {
   try {
-    const { idToken } = req.body;
+    const { idToken, purpose, graphAccessToken } = req.body;
 
     if (!idToken) {
       return res.status(400).json({ message: 'Microsoft idToken is required.' });
     }
 
-    const result = await loginWithMicrosoft(idToken);
+    const result = await loginWithMicrosoft(idToken, { purpose, graphAccessToken });
     return res.json(result);
   } catch (error) {
     return next(error);

@@ -89,6 +89,17 @@ router.post('/login', login);
  *                 type: string
  *                 description: Microsoft Entra ID token from MSAL React
  *                 example: eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIs...
+ *               purpose:
+ *                 type: string
+ *                 enum:
+ *                   - admin
+ *                   - chat
+ *                 description: Use admin for admin portal login and chat for chatbot guest-limit login.
+ *                 example: chat
+ *               graphAccessToken:
+ *                 type: string
+ *                 description: Optional Microsoft Graph access token with User.Read permission. Used only to fetch the user's profile photo.
+ *                 example: eyJ0eXAiOiJKV1QiLCJub25jZSI6...
  *     responses:
  *       200:
  *         description: Microsoft login successful

@@ -38,13 +38,6 @@ The API depends on these local services:
 - **Ollama embedding model** - generates vectors for Qdrant semantic search.
 - **Qdrant** - vector database used for semantic document search.
 - **Tesseract OCR** - optional, used to read text from embedded images/screenshots.
-- **Playwright Chromium** - used by the website importer to capture modal/tab/accordion content.
-
-Install Playwright browser support after `npm install`:
-
-```bash
-npx playwright install chromium
-```
 
 2. Copy environment config:
 

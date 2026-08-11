@@ -10,7 +10,6 @@ const documentRoutes = require('./routes/documentRoutes');
 const embedOriginRoutes = require('./routes/embedOriginRoutes');
 const scopeRoutes = require('./routes/scopeRoutes');
 const userRoutes = require('./routes/userRoutes');
-const websiteImportRoutes = require('./routes/websiteImportRoutes');
 
 const app = express();
 
@@ -42,7 +41,6 @@ app.use('/api/documents', documentRoutes);
 app.use('/api/embed-origins', embedOriginRoutes);
 app.use('/api/chatbot-scopes', scopeRoutes);
 app.use('/api/users', userRoutes);
-app.use('/api/website-import', websiteImportRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ message: 'Route not found.' });

@@ -8,7 +8,41 @@ const {
 } = require('../config/env');
 const jwt = require('jsonwebtoken');
 
+const LOGIN_PURPOSES = {
+  ADMIN: 'admin',
+  CHAT: 'chat'
+};
+
 let remoteJwks;
+
+async function fetchMicrosoftProfilePhoto(graphAccessToken) {
+  if (!graphAccessToken) {
+    return null;
+  }
+
+  try {
+    const response = await fetch('https://graph.microsoft.com/v1.0/me/photos/48x48/$value', {
+      headers: {
+        Authorization: `Bearer ${graphAccessToken}`
+      }
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    const imageBuffer = Buffer.from(await response.arrayBuffer());
+
+    if (imageBuffer.length === 0 || imageBuffer.length > 256 * 1024) {
+      return null;
+    }
+
+    return `data:${contentType};base64,${imageBuffer.toString('base64')}`;
+  } catch {
+    return null;
+  }
+}
 
 async function verifyMicrosoftIdToken(idToken) {
   if (!microsoftTenantId || !microsoftClientId) {
@@ -66,27 +100,77 @@ function signApiUser(user) {
   );
 }
 
-async function findOrCreateMicrosoftUser(profile) {
+async function findOrCreateMicrosoftUser(profile, purpose = LOGIN_PURPOSES.ADMIN) {
   const [rows] = await pool.execute(
     'SELECT * FROM users WHERE microsoft_id = ? OR email = ? LIMIT 1',
     [profile.microsoftId, profile.email]
   );
   const existingUser = rows[0];
+  const isChatLogin = purpose === LOGIN_PURPOSES.CHAT;
 
   if (existingUser) {
-    if (existingUser.role !== 'admin' || existingUser.microsoft_id !== profile.microsoftId) {
+    if (isChatLogin) {
+      const isApprovedAdmin = existingUser.role === 'admin' && existingUser.approval_status === 'approved';
+      const chatRole = isApprovedAdmin ? 'admin' : 'student';
+      const chatApprovalStatus = 'approved';
+
       await pool.execute(
-        'UPDATE users SET name = ?, email = ?, microsoft_id = ?, role = ? WHERE id = ?',
-        [profile.name, profile.email, profile.microsoftId, 'admin', existingUser.id]
+        'UPDATE users SET name = ?, email = ?, microsoft_id = ?, role = ?, approval_status = ? WHERE id = ?',
+        [profile.name, profile.email, profile.microsoftId, chatRole, chatApprovalStatus, existingUser.id]
       );
+
+      return {
+        id: existingUser.id,
+        name: profile.name,
+        email: profile.email,
+        role: chatRole,
+        approval_status: chatApprovalStatus
+      };
     }
+
+    if (existingUser.role !== 'admin') {
+      await pool.execute(
+        'UPDATE users SET name = ?, email = ?, microsoft_id = ? WHERE id = ?',
+        [profile.name, profile.email, profile.microsoftId, existingUser.id]
+      );
+
+      return {
+        id: existingUser.id,
+        name: profile.name,
+        email: profile.email,
+        role: existingUser.role || 'student',
+        approval_status: existingUser.approval_status || 'approved'
+      };
+    }
+
+    const adminApprovalStatus = existingUser.approval_status || 'pending';
+
+    await pool.execute(
+      'UPDATE users SET name = ?, email = ?, microsoft_id = ?, role = ?, approval_status = ? WHERE id = ?',
+      [profile.name, profile.email, profile.microsoftId, 'admin', adminApprovalStatus, existingUser.id]
+    );
 
     return {
       id: existingUser.id,
       name: profile.name,
       email: profile.email,
       role: 'admin',
-      approval_status: existingUser.approval_status || 'pending'
+      approval_status: adminApprovalStatus
+    };
+  }
+
+  if (isChatLogin) {
+    const [result] = await pool.execute(
+      'INSERT INTO users (name, email, password, microsoft_id, role, approval_status) VALUES (?, ?, NULL, ?, ?, ?)',
+      [profile.name, profile.email, profile.microsoftId, 'student', 'approved']
+    );
+
+    return {
+      id: result.insertId,
+      name: profile.name,
+      email: profile.email,
+      role: 'student',
+      approval_status: 'approved'
     };
   }
 
@@ -104,11 +188,12 @@ async function findOrCreateMicrosoftUser(profile) {
   };
 }
 
-async function loginWithMicrosoft(idToken) {
+async function loginWithMicrosoft(idToken, options = {}) {
   const profile = await verifyMicrosoftIdToken(idToken);
-  const user = await findOrCreateMicrosoftUser(profile);
+  const purpose = options.purpose === LOGIN_PURPOSES.CHAT ? LOGIN_PURPOSES.CHAT : LOGIN_PURPOSES.ADMIN;
+  const user = await findOrCreateMicrosoftUser(profile, purpose);
 
-  if (user.approval_status !== 'approved') {
+  if (purpose === LOGIN_PURPOSES.ADMIN && (user.role !== 'admin' || user.approval_status !== 'approved')) {
     const error = new Error(
       user.approval_status === 'rejected'
         ? 'Your admin access request was rejected.'
@@ -120,12 +205,16 @@ async function loginWithMicrosoft(idToken) {
     throw error;
   }
 
+  const photoUrl = await fetchMicrosoftProfilePhoto(options.graphAccessToken);
+  const responseUser = photoUrl ? { ...user, photoUrl } : user;
+
   return {
-    user,
+    user: responseUser,
     token: signApiUser(user)
   };
 }
 
 module.exports = {
+  LOGIN_PURPOSES,
   loginWithMicrosoft
 };

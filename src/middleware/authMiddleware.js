@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { jwtSecret } = require('../config/env');
+const pool = require('../utils/db');
 
 function authenticate(req, res, next) {
   const header = req.headers.authorization;
@@ -17,7 +18,7 @@ function authenticate(req, res, next) {
   }
 }
 
-function requireAdmin(req, res, next) {
+async function requireAdmin(req, res, next) {
   if (req.user?.role !== 'admin') {
     return res.status(403).json({ message: 'Admin access is required.' });
   }
@@ -29,7 +30,24 @@ function requireAdmin(req, res, next) {
     });
   }
 
-  return next();
+  try {
+    const [rows] = await pool.execute(
+      'SELECT role, approval_status FROM users WHERE id = ? LIMIT 1',
+      [req.user.id]
+    );
+    const currentUser = rows[0];
+
+    if (!currentUser || currentUser.role !== 'admin' || currentUser.approval_status !== 'approved') {
+      return res.status(403).json({
+        code: 'ADMIN_ACCESS_REVOKED',
+        message: 'Approved admin access is required.'
+      });
+    }
+
+    return next();
+  } catch (error) {
+    return next(error);
+  }
 }
 
 module.exports = {

@@ -1,5 +1,11 @@
 const express = require('express');
-const { approveUser, listAccounts, setUserPassword, updateApprovalStatus } = require('../controllers/userController');
+const {
+  approveUser,
+  listAccounts,
+  setUserPassword,
+  updateApprovalStatus,
+  updateUserRole
+} = require('../controllers/userController');
 const { authenticate, requireAdmin } = require('../middleware/authMiddleware');
 
 const router = express.Router();
@@ -169,5 +175,49 @@ router.patch('/password', authenticate, requireAdmin, setUserPassword);
  *         description: User was not found
  */
 router.patch('/:id/approval', authenticate, requireAdmin, updateApprovalStatus);
+
+/**
+ * @swagger
+ * /api/users/{id}/role:
+ *   patch:
+ *     summary: Change a user's role
+ *     description: Promote a user to approved admin access or change the user back to approved student access. Requires an approved admin session.
+ *     tags:
+ *       - Users
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         example: 3
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - role
+ *             properties:
+ *               role:
+ *                 type: string
+ *                 enum: [student, admin]
+ *                 example: admin
+ *     responses:
+ *       200:
+ *         description: User role updated
+ *       400:
+ *         description: Invalid role or unsafe role change
+ *       401:
+ *         description: Authorization token is required
+ *       403:
+ *         description: Approved admin access is required
+ *       404:
+ *         description: User was not found
+ */
+router.patch('/:id/role', authenticate, requireAdmin, updateUserRole);
 
 module.exports = router;

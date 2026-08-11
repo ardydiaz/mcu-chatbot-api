@@ -17,8 +17,10 @@ const router = express.Router();
  *     responses:
  *       200:
  *         description: List of uploaded documents
+ *       403:
+ *         description: Approved admin access is required
  */
-router.get('/', authenticate, listDocuments);
+router.get('/', authenticate, requireAdmin, listDocuments);
 
 /**
  * @swagger
@@ -41,10 +43,12 @@ router.get('/', authenticate, listDocuments);
  *         description: Document details with extracted text and images
  *       401:
  *         description: Authorization token is required
+ *       403:
+ *         description: Approved admin access is required
  *       404:
  *         description: Document was not found
  */
-router.get('/:id', authenticate, getDocument);
+router.get('/:id', authenticate, requireAdmin, getDocument);
 
 /**
  * @swagger

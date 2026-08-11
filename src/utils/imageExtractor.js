@@ -7,28 +7,6 @@ const { imageDir } = require('../config/env');
 
 const inflateRaw = promisify(zlib.inflateRaw);
 
-function getPopplerImagePath(documentImageDir, pageNumber) {
-  return path.join(documentImageDir, `page-${String(pageNumber).padStart(3, '0')}.png`);
-}
-
-async function convertWithPoppler(filePath, documentImageDir, pageNumber) {
-  if (process.platform !== 'win32') {
-    throw new Error('pdf-poppler conversion is only enabled on Windows.');
-  }
-
-  const pdfPoppler = require('pdf-poppler');
-
-  await pdfPoppler.convert(filePath, {
-    format: 'png',
-    out_dir: documentImageDir,
-    out_prefix: 'page',
-    page: pageNumber,
-    scale: 1400
-  });
-
-  return getPopplerImagePath(documentImageDir, pageNumber);
-}
-
 async function convertWithPdf2pic(filePath, documentImageDir, pageNumber) {
   const converter = fromPath(filePath, {
     density: 100,
@@ -57,13 +35,7 @@ async function extractImages(filePath, documentId, pageCount, options = {}) {
 
   for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
     try {
-      let imagePath;
-
-      try {
-        imagePath = await convertWithPoppler(filePath, documentImageDir, pageNumber);
-      } catch (popplerError) {
-        imagePath = await convertWithPdf2pic(filePath, documentImageDir, pageNumber);
-      }
+      const imagePath = await convertWithPdf2pic(filePath, documentImageDir, pageNumber);
 
       images.push({
         pageNumber,

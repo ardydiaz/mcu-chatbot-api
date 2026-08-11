@@ -32,6 +32,31 @@ async function listAccounts(req, res, next) {
   }
 }
 
+async function getAccountById(userId) {
+  const [rows] = await pool.execute(
+    `SELECT id, name, email, microsoft_id, role, approval_status, approved_at, approved_by, password, created_at
+     FROM users
+     WHERE id = ?
+     LIMIT 1`,
+    [userId]
+  );
+
+  return rows[0] || null;
+}
+
+async function hasAnotherApprovedAdmin(userId) {
+  const [rows] = await pool.execute(
+    `SELECT COUNT(*) AS total
+     FROM users
+     WHERE role = 'admin'
+       AND approval_status = 'approved'
+       AND id <> ?`,
+    [userId]
+  );
+
+  return Number(rows[0]?.total || 0) > 0;
+}
+
 async function setApprovalStatus({ userId, approvalStatus, approvedByUserId }) {
   const approvedAt = approvalStatus === 'approved' ? new Date() : null;
   const approvedBy = approvalStatus === 'approved' ? approvedByUserId : null;
@@ -68,6 +93,25 @@ async function updateApprovalStatus(req, res, next) {
       return res.status(400).json({ message: 'approvalStatus must be approved, rejected, or pending.' });
     }
 
+    const currentUser = await getAccountById(id);
+
+    if (!currentUser) {
+      return res.status(404).json({ message: 'User was not found.' });
+    }
+
+    if (Number(id) === Number(req.user.id) && approvalStatus !== 'approved') {
+      return res.status(400).json({ message: 'You cannot remove approval from your own admin account.' });
+    }
+
+    if (
+      currentUser.role === 'admin' &&
+      currentUser.approval_status === 'approved' &&
+      approvalStatus !== 'approved' &&
+      !(await hasAnotherApprovedAdmin(id))
+    ) {
+      return res.status(400).json({ message: 'At least one approved admin account must remain active.' });
+    }
+
     const user = await setApprovalStatus({
       userId: id,
       approvalStatus,
@@ -80,6 +124,59 @@ async function updateApprovalStatus(req, res, next) {
 
     return res.json({
       user
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function updateUserRole(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { role } = req.body;
+    const allowedRoles = ['student', 'admin'];
+
+    if (!allowedRoles.includes(role)) {
+      return res.status(400).json({ message: 'role must be student or admin.' });
+    }
+
+    const currentUser = await getAccountById(id);
+
+    if (!currentUser) {
+      return res.status(404).json({ message: 'User was not found.' });
+    }
+
+    if (Number(id) === Number(req.user.id) && role !== 'admin') {
+      return res.status(400).json({ message: 'You cannot remove your own admin role.' });
+    }
+
+    if (
+      currentUser.role === 'admin' &&
+      currentUser.approval_status === 'approved' &&
+      role !== 'admin' &&
+      !(await hasAnotherApprovedAdmin(id))
+    ) {
+      return res.status(400).json({ message: 'At least one approved admin account must remain active.' });
+    }
+
+    const approvalStatus = 'approved';
+    const approvedAt = new Date();
+    const approvedBy = req.user.id;
+
+    await pool.execute(
+      `UPDATE users
+       SET role = ?, approval_status = ?, approved_at = ?, approved_by = ?
+       WHERE id = ?`,
+      [role, approvalStatus, approvedAt, approvedBy, id]
+    );
+
+    const updatedUser = await getAccountById(id);
+
+    return res.json({
+      message: role === 'admin'
+        ? 'User was promoted to approved admin successfully.'
+        : 'User was changed to approved student successfully.',
+      user: mapAccount(updatedUser)
     });
   } catch (error) {
     return next(error);
@@ -165,5 +262,6 @@ module.exports = {
   approveUser,
   listAccounts,
   setUserPassword,
-  updateApprovalStatus
+  updateApprovalStatus,
+  updateUserRole
 };
