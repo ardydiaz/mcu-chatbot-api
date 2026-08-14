@@ -72,10 +72,14 @@ CREATE TABLE IF NOT EXISTS document_images (
 CREATE TABLE IF NOT EXISTS chat_logs (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NULL,
+  user_account_id INT NULL,
   message LONGTEXT NOT NULL,
   response LONGTEXT NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_chat_logs_user
     FOREIGN KEY (user_id) REFERENCES api_account(id)
+    ON DELETE SET NULL,
+  CONSTRAINT fk_chat_logs_user_account
+    FOREIGN KEY (user_account_id) REFERENCES users(id)
     ON DELETE SET NULL
 );

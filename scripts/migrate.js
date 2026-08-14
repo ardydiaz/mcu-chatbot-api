@@ -11,6 +11,7 @@ const migrationOrder = [
   'add_document_uploaded_by_user.sql',
   'add_microsoft_users_columns.sql',
   'alter_chat_logs_longtext.sql',
+  'add_chat_logs_user_account_id.sql',
   'add_embed_tokens.sql',
   'add_document_topic_metadata.sql'
 ];

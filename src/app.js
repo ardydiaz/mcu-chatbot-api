@@ -5,6 +5,7 @@ const swaggerUi = require('swagger-ui-express');
 const { clientUrls } = require('./config/env');
 const swaggerSpec = require('./config/swagger');
 const authRoutes = require('./routes/authRoutes');
+const chatLogRoutes = require('./routes/chatLogRoutes');
 const chatRoutes = require('./routes/chatRoutes');
 const documentRoutes = require('./routes/documentRoutes');
 const embedOriginRoutes = require('./routes/embedOriginRoutes');
@@ -37,6 +38,7 @@ app.get('/health', (req, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/chat-logs', chatLogRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/embed-origins', embedOriginRoutes);
 app.use('/api/chatbot-scopes', scopeRoutes);
@@ -48,9 +50,21 @@ app.use((req, res) => {
 
 app.use((error, req, res, next) => {
   const status = error.status || 500;
+  const isDatabaseError = [
+    'ER_DATA_TOO_LONG',
+    'ER_TRUNCATED_WRONG_VALUE_FOR_FIELD',
+    'WARN_DATA_TRUNCATED'
+  ].includes(error.code);
+
+  if (status >= 500) {
+    console.error(error);
+  }
+
   res.status(status).json({
-    code: error.code,
-    message: error.message || 'Internal server error.',
+    code: isDatabaseError ? 'DATABASE_ERROR' : error.code,
+    message: isDatabaseError || status >= 500
+      ? 'The chatbot encountered a server error. Please try again.'
+      : error.message || 'Internal server error.',
     approvalStatus: error.approvalStatus
   });
 });

@@ -130,6 +130,14 @@ function buildConversationalReply(answer) {
   };
 }
 
+function normalizeApiAccountRole(value) {
+  return ['student', 'admin'].includes(value) ? value : 'student';
+}
+
+function normalizeApprovalStatus(value) {
+  return ['pending', 'approved', 'rejected'].includes(value) ? value : 'approved';
+}
+
 async function getChatLogUserId(user) {
   if (!user?.email) {
     return null;
@@ -147,19 +155,36 @@ async function getChatLogUserId(user) {
   const [result] = await pool.execute(
     `INSERT INTO api_account (name, email, password, role, approval_status)
      VALUES (?, ?, NULL, ?, ?)`,
-    [user.name || user.email, user.email, user.role || 'student', user.approvalStatus || 'approved']
+    [
+      user.name || user.email,
+      user.email,
+      normalizeApiAccountRole(user.role),
+      normalizeApprovalStatus(user.approvalStatus)
+    ]
   );
 
   return result.insertId;
 }
 
-async function saveChatLog({ userId, message, response }) {
+function getChatLogUserAccountId(user) {
+  return user?.id ? Number(user.id) : null;
+}
+
+async function saveChatLog({ userId, userAccountId, message, response }) {
   try {
     await pool.execute(
-      'INSERT INTO chat_logs (user_id, message, response) VALUES (?, ?, ?)',
-      [userId, message, response]
+      'INSERT INTO chat_logs (user_id, user_account_id, message, response) VALUES (?, ?, ?, ?)',
+      [userId, userAccountId, message, response]
     );
   } catch (error) {
+    if (error.code === 'ER_BAD_FIELD_ERROR') {
+      await pool.execute(
+        'INSERT INTO chat_logs (user_id, message, response) VALUES (?, ?, ?)',
+        [userId, message, response]
+      );
+      return;
+    }
+
     console.warn('Chat log was not saved:', error.message);
   }
 }
@@ -191,9 +216,20 @@ async function askQuestion(req, res, next) {
     const result = getSimpleChatReply(message)
       || (conversationalAnswer ? buildConversationalReply(conversationalAnswer) : null)
       || await searchDocuments(message, { scope });
-    const userId = await getChatLogUserId(req.user);
+    let userId = null;
 
-    await saveChatLog({ userId, message, response: result.answer });
+    try {
+      userId = await getChatLogUserId(req.user);
+    } catch (error) {
+      console.warn('Chat log user was not resolved:', error.message);
+    }
+
+    await saveChatLog({
+      userId,
+      userAccountId: getChatLogUserAccountId(req.user),
+      message,
+      response: result.answer
+    });
 
     return res.json({
       question: message,
