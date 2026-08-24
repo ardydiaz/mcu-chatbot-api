@@ -128,7 +128,7 @@ function duplicateQuestionLimit(req, res, next) {
   return next();
 }
 
-router.get('/topics', getTopics);
+router.get('/topics', optionalAuthenticate, getTopics);
 
 /**
  * @swagger

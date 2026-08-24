@@ -78,6 +78,11 @@ router.get('/:id', authenticate, requireAdmin, getDocument);
  *               siteScope:
  *                 type: string
  *                 example: general
+ *               accessLevel:
+ *                 type: string
+ *                 enum: [external, internal]
+ *                 example: external
+ *                 description: Use external for public documents and internal for Microsoft 365 login-required documents. For mixed content, upload the public and internal versions as separate documents.
  *               topicCategory:
  *                 type: string
  *                 example: Admissions
