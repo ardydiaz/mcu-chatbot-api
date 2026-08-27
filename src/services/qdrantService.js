@@ -165,7 +165,7 @@ async function deleteDocumentVectors(documentId) {
   }
 }
 
-async function indexDocumentPages({ documentId, title, siteScope, accessLevel = 'external', pages }) {
+async function indexDocumentPages({ documentId, title, siteScope, pages }) {
   if (!isQdrantEnabled()) {
     return { indexed: 0, enabled: false };
   }
@@ -197,7 +197,6 @@ async function indexDocumentPages({ documentId, title, siteScope, accessLevel = 
           documentId: Number(documentId),
           title,
           siteScope,
-          accessLevel,
           pageNumber: Number(page.pageNumber),
           chunkIndex,
           content: chunk
@@ -214,7 +213,7 @@ async function indexDocumentPages({ documentId, title, siteScope, accessLevel = 
   };
 }
 
-async function searchSemanticDocuments(question, { scope = 'general', includeInternal = false, limit = 12 } = {}) {
+async function searchSemanticDocuments(question, { scope = 'general', limit = 12 } = {}) {
   if (!isQdrantEnabled()) {
     return [];
   }
@@ -240,11 +239,7 @@ async function searchSemanticDocuments(question, { scope = 'general', includeInt
             {
               key: 'siteScope',
               match: { value: scope }
-            },
-            ...(includeInternal ? [] : [{
-              key: 'accessLevel',
-              match: { value: 'external' }
-            }])
+            }
           ]
         }
       })

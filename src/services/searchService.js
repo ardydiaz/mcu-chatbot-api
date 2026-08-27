@@ -121,11 +121,7 @@ function getTableOfContentsPageRefs(match, normalizedQuestion) {
     });
 }
 
-function canIncludeInternalDocuments(value) {
-  return value ? 1 : 0;
-}
-
-async function findMatchesByPrintedPageRefs(pageRefs, { includeInternal = false } = {}) {
+async function findMatchesByPrintedPageRefs(pageRefs) {
   if (pageRefs.length === 0) {
     return [];
   }
@@ -141,9 +137,8 @@ async function findMatchesByPrintedPageRefs(pageRefs, { includeInternal = false 
     `SELECT dt.document_id, dt.page_number, dt.content, d.title
      FROM document_text dt
      JOIN documents d ON d.id = dt.document_id
-     WHERE (${conditions})
-       AND (? = 1 OR COALESCE(d.access_level, 'external') = 'external')`,
-    [...params, canIncludeInternalDocuments(includeInternal)]
+     WHERE (${conditions})`,
+    params
   );
 
   return rows.map(addPageMetadata);
@@ -519,40 +514,6 @@ function buildNoOfficialMatchAnswer() {
     images: [],
     sources: []
   };
-}
-
-function buildInternalLoginRequiredAnswer() {
-  return {
-    answer: 'This information is available in an internal university document. Please log in with Microsoft 365 to access it.',
-    answerBlocks: [
-      {
-        type: 'p',
-        text: 'This information is available in an internal university document. Please log in with Microsoft 365 to access it.'
-      }
-    ],
-    answerMode: 'login_required_for_internal_document',
-    images: [],
-    sources: []
-  };
-}
-
-async function hasInternalDocumentMatch({ scope, question, likeQuery, exactLikeQuery, exactSearchPhrase }) {
-  const [rows] = await pool.execute(
-    `SELECT d.id
-     FROM documents d
-     LEFT JOIN document_text dt ON dt.document_id = d.id
-     WHERE d.site_scope = ?
-       AND d.access_level = 'internal'
-       AND (
-         d.title LIKE ?
-         OR dt.content LIKE ?
-         OR MATCH(dt.content) AGAINST (? IN NATURAL LANGUAGE MODE)
-       )
-     LIMIT 1`,
-    [scope, exactSearchPhrase.length > 2 ? exactLikeQuery : likeQuery, exactSearchPhrase.length > 2 ? exactLikeQuery : likeQuery, question]
-  );
-
-  return rows.length > 0;
 }
 
 async function buildNoMatchAnswer({ question }) {
@@ -999,7 +960,7 @@ function getTopicIcon(title) {
   return firstAlphaNumeric.toUpperCase();
 }
 
-async function listKnowledgeTopics({ scope = 'general', includeInternal = false } = {}) {
+async function listKnowledgeTopics({ scope = 'general' } = {}) {
   const [documents] = await pool.execute(
     `SELECT MAX(d.id) AS id, d.title, MAX(d.created_at) AS created_at,
             SUBSTRING_INDEX(GROUP_CONCAT(d.topic_category ORDER BY d.created_at DESC SEPARATOR '||'), '||', 1) AS topic_category,
@@ -1009,10 +970,9 @@ async function listKnowledgeTopics({ scope = 'general', includeInternal = false 
      LEFT JOIN document_text dt ON dt.document_id = d.id
      WHERE d.site_scope = ?
        AND d.show_as_topic = 1
-       AND (? = 1 OR COALESCE(d.access_level, 'external') = 'external')
      GROUP BY d.title
      ORDER BY created_at DESC`,
-    [scope, canIncludeInternalDocuments(includeInternal)]
+    [scope]
   );
   const groups = new Map();
 
@@ -1101,7 +1061,7 @@ function buildHybridOfficialAnswer({ summary, officialText }) {
   return [summary, officialText].join('\n\n');
 }
 
-async function searchDocuments(question, { scope = 'general', includeInternal = false } = {}) {
+async function searchDocuments(question, { scope = 'general' } = {}) {
   const likeQuery = `%${question}%`;
   const terms = getSearchTerms(question);
   const normalizedQuestion = normalizeText(question);
@@ -1110,7 +1070,6 @@ async function searchDocuments(question, { scope = 'general', includeInternal = 
   const leadershipQuestion = isLeadershipQuestion(question);
   const addressQuestion = isAddressQuestion(question);
   const intentRule = detectQuestionIntent(question);
-  const includeInternalFlag = canIncludeInternalDocuments(includeInternal);
 
   if (!intentRule && isLikelyGeneralTechnologyQuestion(question)) {
     return buildNoMatchAnswer({ question });
@@ -1137,11 +1096,10 @@ async function searchDocuments(question, { scope = 'general', includeInternal = 
        FROM document_text dt
        JOIN documents d ON d.id = dt.document_id
        WHERE d.site_scope = ?
-         AND (? = 1 OR COALESCE(d.access_level, 'external') = 'external')
          AND d.title LIKE ?
        ORDER BY dt.page_number ASC
        LIMIT 10`,
-      [scope, includeInternalFlag, exactLikeQuery]
+      [scope, exactLikeQuery]
     )
     : [[]];
 
@@ -1151,10 +1109,9 @@ async function searchDocuments(question, { scope = 'general', includeInternal = 
        FROM document_text dt
        JOIN documents d ON d.id = dt.document_id
        WHERE d.site_scope = ?
-         AND (? = 1 OR COALESCE(d.access_level, 'external') = 'external')
          AND dt.content LIKE ?
        LIMIT 10`,
-      [scope, includeInternalFlag, exactLikeQuery]
+      [scope, exactLikeQuery]
     )
     : [[]];
 
@@ -1163,15 +1120,14 @@ async function searchDocuments(question, { scope = 'general', includeInternal = 
      FROM document_text dt
      JOIN documents d ON d.id = dt.document_id
      WHERE d.site_scope = ?
-       AND (? = 1 OR COALESCE(d.access_level, 'external') = 'external')
        AND (
          MATCH(dt.content) AGAINST (? IN NATURAL LANGUAGE MODE)
          OR dt.content LIKE ?
        )
      LIMIT 25`,
-    [scope, includeInternalFlag, question, likeQuery]
+    [scope, question, likeQuery]
   );
-  const semanticRows = await searchSemanticDocuments(question, { scope, includeInternal });
+  const semanticRows = await searchSemanticDocuments(question, { scope });
   const dedupedRows = new Map();
   [...titleRows, ...exactPhraseRows, ...semanticRows, ...broadRows].forEach((row) => {
     dedupedRows.set(`${row.document_id}:${row.page_number}`, row);
@@ -1204,7 +1160,7 @@ async function searchDocuments(question, { scope = 'general', includeInternal = 
     );
     const tocPageRefs = enrichedMatches.flatMap((match) => getTableOfContentsPageRefs(match, normalizedExactPhrase));
     const tocPageMatches = exactMatches.length === 0 && titleMatches.length === 0
-      ? await findMatchesByPrintedPageRefs(tocPageRefs, { includeInternal })
+      ? await findMatchesByPrintedPageRefs(tocPageRefs)
       : [];
 
     if (
@@ -1243,9 +1199,8 @@ async function searchDocuments(question, { scope = 'general', includeInternal = 
         `SELECT dt.document_id, dt.page_number, dt.content, d.title
          FROM document_text dt
          JOIN documents d ON d.id = dt.document_id
-         WHERE (${exactPageConditions})
-           AND (? = 1 OR COALESCE(d.access_level, 'external') = 'external')`,
-        [...exactPageParams, includeInternalFlag]
+         WHERE (${exactPageConditions})`,
+        exactPageParams
       );
 
       const dedupedMatches = new Map();
@@ -1270,10 +1225,6 @@ async function searchDocuments(question, { scope = 'general', includeInternal = 
     if (candidateMatches.length === 0) {
       if (leadershipQuestion) {
         return buildNoOfficialMatchAnswer();
-      }
-
-      if (!includeInternal && await hasInternalDocumentMatch({ scope, question, likeQuery, exactLikeQuery, exactSearchPhrase })) {
-        return buildInternalLoginRequiredAnswer();
       }
 
       return buildNoMatchAnswer({ question });
@@ -1386,10 +1337,6 @@ async function searchDocuments(question, { scope = 'general', includeInternal = 
         pageLabel: match.pageLabel
       }))
     };
-  }
-
-  if (!includeInternal && await hasInternalDocumentMatch({ scope, question, likeQuery, exactLikeQuery, exactSearchPhrase })) {
-    return buildInternalLoginRequiredAnswer();
   }
 
   return buildNoMatchAnswer({ question });

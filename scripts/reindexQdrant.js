@@ -8,7 +8,7 @@ async function main() {
   }
 
   const [documents] = await pool.execute(
-    `SELECT id, title, site_scope, access_level
+    `SELECT id, title, site_scope
      FROM documents
      ORDER BY id ASC`
   );
@@ -29,7 +29,6 @@ async function main() {
       documentId: document.id,
       title: document.title,
       siteScope: document.site_scope || 'general',
-      accessLevel: document.access_level || 'external',
       pages
     });
 

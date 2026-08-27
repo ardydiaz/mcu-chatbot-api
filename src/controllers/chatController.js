@@ -170,10 +170,6 @@ function getChatLogUserAccountId(user) {
   return user?.id ? Number(user.id) : null;
 }
 
-function canAccessInternalDocuments(user) {
-  return Boolean(user?.id || user?.email);
-}
-
 async function saveChatLog({ userId, userAccountId, message, response }) {
   try {
     await pool.execute(
@@ -219,10 +215,7 @@ async function askQuestion(req, res, next) {
       : null;
     const result = getSimpleChatReply(message)
       || (conversationalAnswer ? buildConversationalReply(conversationalAnswer) : null)
-      || await searchDocuments(message, {
-        scope,
-        includeInternal: canAccessInternalDocuments(req.user)
-      });
+      || await searchDocuments(message, { scope });
     let userId = null;
 
     try {
@@ -258,10 +251,7 @@ async function getTopics(req, res, next) {
       return res.status(403).json({ message: getForbiddenEmbedMessage(), topicGroups: [] });
     }
 
-    const topicGroups = await listKnowledgeTopics({
-      scope,
-      includeInternal: canAccessInternalDocuments(req.user)
-    });
+    const topicGroups = await listKnowledgeTopics({ scope });
     return res.json({ topicGroups });
   } catch (error) {
     return next(error);

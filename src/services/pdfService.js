@@ -82,7 +82,6 @@ async function processDocument({
   uploadedBy,
   uploadedByUserId = null,
   siteScope = 'general',
-  accessLevel = 'external',
   topicCategory = null,
   suggestedPrompt = null,
   showAsTopic = true
@@ -97,9 +96,9 @@ async function processDocument({
     await connection.beginTransaction();
 
     const [documentResult] = await connection.execute(
-      `INSERT INTO documents (title, file_path, site_scope, access_level, topic_category, suggested_prompt, show_as_topic, uploaded_by, uploaded_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [title, filePath, siteScope, accessLevel, topicCategory, suggestedPrompt, showAsTopic ? 1 : 0, uploadedBy, uploadedByUserId]
+      `INSERT INTO documents (title, file_path, site_scope, topic_category, suggested_prompt, show_as_topic, uploaded_by, uploaded_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [title, filePath, siteScope, topicCategory, suggestedPrompt, showAsTopic ? 1 : 0, uploadedBy, uploadedByUserId]
     );
 
     documentId = documentResult.insertId;
@@ -143,7 +142,6 @@ async function processDocument({
       documentId,
       title,
       siteScope,
-      accessLevel,
       pages
     })
       .then((result) => {
@@ -160,7 +158,6 @@ async function processDocument({
     id: documentId,
     title,
     siteScope,
-    accessLevel,
     type: extension.replace('.', '').toUpperCase(),
     pages: pages.length,
     images: 0,

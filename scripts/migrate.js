@@ -13,7 +13,6 @@ const migrationOrder = [
   'alter_chat_logs_longtext.sql',
   'add_chat_logs_user_account_id.sql',
   'add_embed_tokens.sql',
-  'add_document_access_level.sql',
   'add_document_topic_metadata.sql'
 ];
 
