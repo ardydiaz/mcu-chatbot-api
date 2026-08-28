@@ -30,6 +30,7 @@ app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '256kb' }));
 app.use('/storage/images', express.static(path.resolve(__dirname, '..', 'storage/images')));
 app.use('/storage/uploads', express.static(path.resolve(__dirname, '..', 'storage/uploads')));
+app.use('/storage/previews', express.static(path.resolve(__dirname, '..', 'storage/previews')));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.get('/health', (req, res) => {

@@ -34,6 +34,8 @@ module.exports = {
     .filter(Boolean),
   uploadDir: path.resolve(rootDir, process.env.UPLOAD_DIR || 'storage/uploads'),
   imageDir: path.resolve(rootDir, process.env.IMAGE_DIR || 'storage/images'),
+  previewDir: path.resolve(rootDir, process.env.PREVIEW_DIR || 'storage/previews'),
+  officeConverterCommand: process.env.OFFICE_CONVERTER_COMMAND || '',
   uploadMaxFileSizeMb: Number(process.env.UPLOAD_MAX_FILE_SIZE_MB || 100),
   db: {
     host: process.env.DB_HOST || 'localhost',

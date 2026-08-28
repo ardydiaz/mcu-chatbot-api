@@ -4,6 +4,7 @@ const { extractDocumentText } = require('../utils/documentParser');
 const { extractImages } = require('../utils/imageExtractor');
 const { extractTextFromImage } = require('./ocrService');
 const { indexDocumentPages } = require('./qdrantService');
+const { ensureDocumentPreview } = require('./documentPreviewService');
 
 function buildOcrSection(pageNumber, texts) {
   const content = texts.filter(Boolean).join('\n\n').trim();
@@ -136,6 +137,26 @@ async function processDocument({
         });
     });
   }
+
+  setImmediate(() => {
+    ensureDocumentPreview({ documentId, filePath })
+      .then((preview) => {
+        if (!preview.previewFilePath || preview.previewFilePath === filePath) {
+          return;
+        }
+
+        return pool.execute(
+          'UPDATE documents SET preview_file_path = ? WHERE id = ?',
+          [preview.previewFilePath, documentId]
+        );
+      })
+      .then(() => {
+        console.log(`Document ${documentId} preview generation complete.`);
+      })
+      .catch((error) => {
+        console.error(`Document ${documentId} preview generation failed:`, error.message);
+      });
+  });
 
   setImmediate(() => {
     indexDocumentPages({

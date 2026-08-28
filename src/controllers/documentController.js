@@ -2,6 +2,7 @@ const path = require('path');
 const pool = require('../utils/db');
 const { processDocument } = require('../services/pdfService');
 const { toPublicPath } = require('../services/fileService');
+const { ensureDocumentPreview } = require('../services/documentPreviewService');
 const { normalizeScope } = require('../services/scopeService');
 
 function cleanOptionalText(value, maxLength) {
@@ -108,6 +109,93 @@ async function listDocuments(req, res, next) {
   }
 }
 
+async function listLibraryDocuments(req, res, next) {
+  try {
+    const [documents] = await pool.execute(
+      `SELECT d.id, d.title, d.file_path, d.preview_file_path, d.created_at,
+              COALESCE(login_user.name, api_user.name) AS uploaded_by,
+              d.site_scope,
+              d.suggested_prompt,
+              COUNT(di.id) AS image_count
+       FROM documents d
+       LEFT JOIN users login_user ON login_user.id = d.uploaded_by_user_id
+       LEFT JOIN api_account api_user ON api_user.id = d.uploaded_by
+       LEFT JOIN document_images di ON di.document_id = d.id
+       GROUP BY d.id, d.title, d.file_path, d.preview_file_path, d.site_scope, d.suggested_prompt, d.created_at, login_user.name, api_user.name
+       ORDER BY d.created_at DESC`
+    );
+
+    return res.json({
+      documents: documents.map((document) => ({
+        id: document.id,
+        title: document.title,
+        filePath: document.file_path,
+        fileUrl: `/${toPublicPath(document.file_path)}`,
+        previewFileUrl: document.preview_file_path ? `/${toPublicPath(document.preview_file_path)}` : null,
+        siteScope: document.site_scope || 'general',
+        suggestedPrompt: document.suggested_prompt,
+        uploadedBy: document.uploaded_by || 'MCU Admin',
+        createdAt: document.created_at,
+        imageCount: Number(document.image_count || 0)
+      }))
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function getLibraryDocumentPreview(req, res, next) {
+  try {
+    const { id } = req.params;
+    const [rows] = await pool.execute(
+      `SELECT id, title, file_path, preview_file_path
+       FROM documents
+       WHERE id = ?
+       LIMIT 1`,
+      [id]
+    );
+    const document = rows[0];
+
+    if (!document) {
+      return res.status(404).json({ message: 'Document was not found.' });
+    }
+
+    if (document.preview_file_path) {
+      return res.json({
+        previewFileUrl: `/${toPublicPath(document.preview_file_path)}`,
+        originalFileUrl: `/${toPublicPath(document.file_path)}`,
+        generated: false
+      });
+    }
+
+    const preview = await ensureDocumentPreview({
+      documentId: document.id,
+      filePath: document.file_path
+    });
+
+    if (!preview.previewFilePath) {
+      return res.status(422).json({
+        message: 'This file type cannot be previewed in the browser.'
+      });
+    }
+
+    if (preview.previewFilePath !== document.file_path) {
+      await pool.execute(
+        'UPDATE documents SET preview_file_path = ? WHERE id = ?',
+        [preview.previewFilePath, document.id]
+      );
+    }
+
+    return res.json({
+      previewFileUrl: `/${toPublicPath(preview.previewFilePath)}`,
+      originalFileUrl: `/${toPublicPath(document.file_path)}`,
+      generated: preview.generated
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function getDocument(req, res, next) {
   try {
     const { id } = req.params;
@@ -180,6 +268,8 @@ async function getDocument(req, res, next) {
 
 module.exports = {
   getDocument,
+  getLibraryDocumentPreview,
+  listLibraryDocuments,
   uploadDocument,
   listDocuments
 };

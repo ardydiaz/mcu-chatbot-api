@@ -1,5 +1,11 @@
 const express = require('express');
-const { getDocument, uploadDocument, listDocuments } = require('../controllers/documentController');
+const {
+  getDocument,
+  getLibraryDocumentPreview,
+  listLibraryDocuments,
+  uploadDocument,
+  listDocuments
+} = require('../controllers/documentController');
 const { authenticate, requireAdmin } = require('../middleware/authMiddleware');
 const { uploadDocumentFile } = require('../middleware/uploadMiddleware');
 
@@ -21,6 +27,51 @@ const router = express.Router();
  *         description: Approved admin access is required
  */
 router.get('/', authenticate, requireAdmin, listDocuments);
+
+/**
+ * @swagger
+ * /api/documents/library:
+ *   get:
+ *     summary: List uploaded documents for the chatbot Library
+ *     tags:
+ *       - Documents
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Read-only document metadata for authenticated chatbot users
+ *       401:
+ *         description: Authorization token is required
+ */
+router.get('/library', authenticate, listLibraryDocuments);
+
+/**
+ * @swagger
+ * /api/documents/library/{id}/preview:
+ *   get:
+ *     summary: Get or generate a browser preview for an uploaded Library document
+ *     tags:
+ *       - Documents
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         example: 36
+ *     responses:
+ *       200:
+ *         description: Browser preview URL for the uploaded document
+ *       401:
+ *         description: Authorization token is required
+ *       404:
+ *         description: Document was not found
+ *       422:
+ *         description: File type cannot be previewed in the browser
+ */
+router.get('/library/:id/preview', authenticate, getLibraryDocumentPreview);
 
 /**
  * @swagger

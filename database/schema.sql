@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS documents (
   id INT AUTO_INCREMENT PRIMARY KEY,
   title VARCHAR(255) NOT NULL,
   file_path VARCHAR(500) NOT NULL,
+  preview_file_path VARCHAR(500) NULL,
   site_scope VARCHAR(80) NOT NULL DEFAULT 'general',
   topic_category VARCHAR(100) NULL,
   suggested_prompt VARCHAR(255) NULL,
