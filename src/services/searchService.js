@@ -726,6 +726,43 @@ function isGenericInstitutionQuery(normalizedExact, terms) {
   );
 }
 
+function isDocumentOverviewQuestion(question) {
+  const normalized = normalizeText(question);
+
+  return /^(what is|what are|tell me about|explain|describe|overview of|give me|show me)\b/.test(normalized);
+}
+
+function hasTitleOverviewMatch(matches, exactSearchPhrase, question) {
+  if (!isDocumentOverviewQuestion(question)) {
+    return false;
+  }
+
+  const normalizedExact = normalizeText(exactSearchPhrase || question);
+
+  if (normalizedExact.length < 4) {
+    return false;
+  }
+
+  return matches.some((match) => normalizeText(match.title || '').includes(normalizedExact));
+}
+
+function getTitleOverviewDocumentId(matches, exactSearchPhrase, question) {
+  if (!hasTitleOverviewMatch(matches, exactSearchPhrase, question)) {
+    return null;
+  }
+
+  const normalizedExact = normalizeText(exactSearchPhrase || question);
+  const titleMatches = matches
+    .filter((match) => normalizeText(match.title || '').includes(normalizedExact))
+    .map((match) => ({
+      ...match,
+      titleScore: normalizeText(match.title || '') === normalizedExact ? 2 : 1
+    }))
+    .sort((a, b) => b.titleScore - a.titleScore || a.page_number - b.page_number);
+
+  return titleMatches[0]?.document_id || null;
+}
+
 function getRelevantOfficialLines(match, { question, terms = [], exactSearchPhrase = '' } = {}) {
   const lines = getCleanOfficialLines(match.content);
   const fullText = lines.join('\n');
@@ -907,6 +944,27 @@ async function hydrateMatchesWithFullPageContent(matches) {
   });
 }
 
+async function getDocumentPageMatches(documentId, maxPages = 30) {
+  if (!documentId) {
+    return [];
+  }
+
+  const safeMaxPages = Math.min(100, Math.max(1, Number(maxPages) || 30));
+  const [rows] = await pool.execute(
+    `SELECT dt.document_id, dt.page_number, dt.content, d.title
+     FROM document_text dt
+     JOIN documents d ON d.id = dt.document_id
+     WHERE dt.document_id = ?
+     ORDER BY dt.page_number ASC
+     LIMIT ${safeMaxPages}`,
+    [documentId]
+  );
+
+  return rows
+    .filter((match) => !isRawDocumentMarkup(match.content))
+    .map(addPageMetadata);
+}
+
 function blocksToText(blocks) {
   return blocks
     .map((block) => {
@@ -1016,7 +1074,7 @@ function buildHybridOfficialBlocks({ summary, officialBlocks }) {
   return blocks;
 }
 
-function getTruncatedText(value, maxLength = 12000) {
+function getTruncatedText(value, maxLength = 2200) {
   const text = String(value || '').trim();
 
   if (text.length <= maxLength) {
@@ -1050,7 +1108,7 @@ function getConciseOfficialExcerpt(officialText) {
     .filter((line) => !/^mcu college .*2026/i.test(line));
   const excerpt = lines.join('\n');
 
-  return getTruncatedText(excerpt);
+  return getTruncatedText(excerpt, 2200);
 }
 
 function buildHybridOfficialAnswer({ summary, officialText }) {
@@ -1250,7 +1308,11 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
       return buildNoOfficialMatchAnswer();
     }
 
-    const maxRankedMatches = isGenericInstitutionQuery(normalizedExactPhrase, terms) ? 1 : 2;
+    const overviewDocumentId = getTitleOverviewDocumentId(candidateMatches, exactSearchPhrase, question);
+    const useCompleteDocumentOverview = Boolean(overviewDocumentId);
+    const maxRankedMatches = isGenericInstitutionQuery(normalizedExactPhrase, terms)
+      ? 1
+      : useCompleteDocumentOverview ? 6 : 2;
     const rankedMatches = candidateMatches
       .map((match) => ({
         ...match,
@@ -1259,7 +1321,13 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
       .sort((a, b) => b.score - a.score)
       .slice(0, maxRankedMatches);
 
-    const hydratedRankedMatches = await hydrateMatchesWithFullPageContent(rankedMatches);
+    const hydratedRankedMatches = useCompleteDocumentOverview
+      ? await getDocumentPageMatches(overviewDocumentId)
+      : await hydrateMatchesWithFullPageContent(rankedMatches);
+
+    if (hydratedRankedMatches.length === 0) {
+      return buildNoMatchAnswer({ question });
+    }
     const imageConditions = hydratedRankedMatches
       .map(() => '(di.document_id = ? AND di.page_number = ?)')
       .join(' OR ');
@@ -1282,13 +1350,31 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
       terms,
       exactSearchPhrase
     });
-    let answerBlocks = await generateStructuredOfficialAnswerWithOllama({
-      question,
-      officialText: officialAnswer
-    });
-    let answerMode = answerBlocks
-      ? 'database_text_structured_with_ollama'
-      : 'database_text';
+    let answerBlocks = null;
+    let answerMode = 'database_text';
+
+    if (useCompleteDocumentOverview) {
+      const exactOfficialAnswer = getTruncatedText(officialAnswer, 12000);
+
+      answerBlocks = exactOfficialAnswer.text
+        ? [{
+          type: 'preformatted',
+          text: exactOfficialAnswer.text,
+          fullText: exactOfficialAnswer.fullText,
+          isTruncated: exactOfficialAnswer.isTruncated
+        }]
+        : buildOfficialTextBlocks(hydratedRankedMatches);
+      answerMode = 'database_text_exact_overview';
+    } else {
+      answerBlocks = await generateStructuredOfficialAnswerWithOllama({
+        question,
+        officialText: officialAnswer,
+        detailLevel: 'compact'
+      });
+      answerMode = answerBlocks
+        ? 'database_text_structured_with_ollama'
+        : 'database_text';
+    }
 
     if (!answerBlocks) {
       const officialSummary = await generateOfficialTextSummaryWithOllama({
@@ -1297,7 +1383,7 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
       });
       const displayOfficialAnswer = officialSummary
         ? getConciseOfficialExcerpt(officialAnswer)
-        : getTruncatedText(officialAnswer);
+        : getTruncatedText(officialAnswer, useCompleteDocumentOverview ? 5200 : 2200);
       const officialBlocks = displayOfficialAnswer.text
         ? [{
           type: 'preformatted',

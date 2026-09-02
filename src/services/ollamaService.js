@@ -73,7 +73,7 @@ function cleanStructuredText(value, maxLength = 1200) {
   return cleanAnswerText(value).slice(0, maxLength).trim();
 }
 
-function normalizeStructuredItems(items) {
+function normalizeStructuredItems(items, maxItems = 10) {
   if (!Array.isArray(items)) {
     return [];
   }
@@ -81,17 +81,20 @@ function normalizeStructuredItems(items) {
   return items
     .map((item) => cleanStructuredText(item, 700))
     .filter(Boolean)
-    .slice(0, 12);
+    .slice(0, maxItems);
 }
 
-function formatStructuredOfficialAnswer(data) {
+function formatStructuredOfficialAnswer(data, { detailLevel = 'compact' } = {}) {
   if (!data || typeof data !== 'object') {
     return null;
   }
 
   const blocks = [];
-  const summary = cleanStructuredText(data.summary, 900);
-  const sections = Array.isArray(data.sections) ? data.sections.slice(0, 8) : [];
+  const isCompleteOverview = detailLevel === 'complete';
+  const summary = cleanStructuredText(data.summary, isCompleteOverview ? 1200 : 900);
+  const sections = Array.isArray(data.sections)
+    ? data.sections.slice(0, isCompleteOverview ? 14 : 6)
+    : [];
 
   if (summary) {
     blocks.push({
@@ -108,8 +111,8 @@ function formatStructuredOfficialAnswer(data) {
 
     const title = cleanStructuredText(section.title, 100);
     const type = cleanStructuredText(section.type, 40).toLowerCase();
-    const content = cleanStructuredText(section.content, 1400);
-    const items = normalizeStructuredItems(section.items);
+    const content = cleanStructuredText(section.content, isCompleteOverview ? 2200 : 1400);
+    const items = normalizeStructuredItems(section.items, isCompleteOverview ? 18 : 10);
 
     if (title) {
       blocks.push({
@@ -197,7 +200,9 @@ function buildOfficialSummaryPrompt({ question, officialText }) {
   ].join('\n');
 }
 
-function buildStructuredOfficialPrompt({ question, officialText }) {
+function buildStructuredOfficialPrompt({ question, officialText, detailLevel = 'compact' }) {
+  const isCompleteOverview = detailLevel === 'complete';
+
   return [
     'You are MCU Guide, a university chatbot.',
     'Your task is to transform official extracted university document text into a clean, readable answer.',
@@ -205,6 +210,12 @@ function buildStructuredOfficialPrompt({ question, officialText }) {
     'Preserve important exact wording, button names, website links, requirements, and steps from the official text.',
     'Do not include raw unorganized page dumps. Combine broken wrapped lines into readable sentences.',
     'Use short sections with clear titles. Use lists for requirements, steps, qualifications, terms, statistics, or grouped facts.',
+    isCompleteOverview
+      ? 'The student is asking about the whole matched document or guide. Include all major relevant sections from the official text, but keep each section concise and readable.'
+      : 'Keep the response useful but compact. Include only the sections that directly answer the student question.',
+    isCompleteOverview
+      ? 'Do not omit important troubleshooting, notes, reminders, requirements, or follow-up sections if they are part of the matched guide.'
+      : 'If the official text is long, summarize the main answer and include the most relevant steps or requirements only.',
     'If the official text contains unrelated content, ignore it.',
     'Return only valid JSON with this exact shape:',
     '{ "summary": "1-3 sentence direct answer", "sections": [ { "title": "Section title", "type": "paragraph", "content": "clean paragraph text", "items": [] }, { "title": "Section title", "type": "list", "content": "", "items": ["item 1", "item 2"] } ] }',
@@ -349,7 +360,7 @@ async function generateOfficialTextSummaryWithOllama({ question, officialText })
   }
 }
 
-async function generateStructuredOfficialAnswerWithOllama({ question, officialText }) {
+async function generateStructuredOfficialAnswerWithOllama({ question, officialText, detailLevel = 'compact' }) {
   if (!ollamaEnabled || !officialText) {
     return null;
   }
@@ -367,14 +378,15 @@ async function generateStructuredOfficialAnswerWithOllama({ question, officialTe
         model: ollamaModel,
         prompt: buildStructuredOfficialPrompt({
           question,
-          officialText: cleanAnswerText(officialText).slice(0, 14000)
+          officialText: cleanAnswerText(officialText).slice(0, detailLevel === 'complete' ? 24000 : 14000),
+          detailLevel
         }),
         stream: false,
         format: 'json',
         options: {
           temperature: 0.12,
           top_p: 0.8,
-          num_predict: 180
+          num_predict: detailLevel === 'complete' ? 1800 : 900
         }
       }),
       signal: controller.signal
@@ -385,7 +397,7 @@ async function generateStructuredOfficialAnswerWithOllama({ question, officialTe
     }
 
     const data = await response.json();
-    return formatStructuredOfficialAnswer(parseJsonResponse(data.response));
+    return formatStructuredOfficialAnswer(parseJsonResponse(data.response), { detailLevel });
   } catch (error) {
     console.warn(`Ollama structured official answer failed: ${error.message}`);
     return null;
