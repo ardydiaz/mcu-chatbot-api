@@ -28,6 +28,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '256kb' }));
+app.use('/vendor/pdfjs', express.static(path.resolve(__dirname, '..', 'node_modules/pdf-parse/lib/pdf.js/v2.0.550/build')));
 app.use('/storage/images', express.static(path.resolve(__dirname, '..', 'storage/images')));
 app.use('/storage/uploads', express.static(path.resolve(__dirname, '..', 'storage/uploads')));
 app.use('/storage/previews', express.static(path.resolve(__dirname, '..', 'storage/previews')));

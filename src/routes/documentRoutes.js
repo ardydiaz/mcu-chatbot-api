@@ -1,8 +1,10 @@
 const express = require('express');
+const multer = require('multer');
 const {
   getDocument,
   getLibraryDocumentPreview,
   listLibraryDocuments,
+  saveCapturedDocumentPage,
   uploadDocument,
   listDocuments
 } = require('../controllers/documentController');
@@ -10,6 +12,12 @@ const { authenticate, requireAdmin } = require('../middleware/authMiddleware');
 const { uploadDocumentFile } = require('../middleware/uploadMiddleware');
 
 const router = express.Router();
+const captureUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024
+  }
+});
 
 /**
  * @swagger
@@ -100,6 +108,7 @@ router.get('/library/:id/preview', authenticate, getLibraryDocumentPreview);
  *         description: Document was not found
  */
 router.get('/:id', authenticate, requireAdmin, getDocument);
+router.post('/:id/captured-pages', authenticate, requireAdmin, captureUpload.single('image'), saveCapturedDocumentPage);
 
 /**
  * @swagger

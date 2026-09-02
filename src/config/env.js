@@ -21,6 +21,8 @@ module.exports = {
   qdrantUrl: process.env.QDRANT_URL || 'http://localhost:6333',
   qdrantApiKey: process.env.QDRANT_API_KEY || '',
   qdrantCollection: process.env.QDRANT_COLLECTION || 'mcu_knowledge_base',
+  qdrantRequestTimeoutMs: Number(process.env.QDRANT_REQUEST_TIMEOUT_MS || 1500),
+  fastDatabaseAnswers: process.env.FAST_DATABASE_ANSWERS !== 'false',
   embedScopeOrigins: process.env.EMBED_SCOPE_ORIGINS || '',
   ocrEnabled: process.env.OCR_ENABLED !== 'false',
   ocrCommand: process.env.OCR_COMMAND || 'tesseract',
@@ -36,6 +38,7 @@ module.exports = {
   imageDir: path.resolve(rootDir, process.env.IMAGE_DIR || 'storage/images'),
   previewDir: path.resolve(rootDir, process.env.PREVIEW_DIR || 'storage/previews'),
   officeConverterCommand: process.env.OFFICE_CONVERTER_COMMAND || '',
+  pdf2picGmClass: process.env.PDF2PIC_GM_CLASS || '',
   uploadMaxFileSizeMb: Number(process.env.UPLOAD_MAX_FILE_SIZE_MB || 100),
   db: {
     host: process.env.DB_HOST || 'localhost',

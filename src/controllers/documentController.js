@@ -1,9 +1,11 @@
 const path = require('path');
+const fs = require('fs/promises');
 const pool = require('../utils/db');
-const { processDocument } = require('../services/pdfService');
+const { processDocument, processImagesForDocument } = require('../services/pdfService');
 const { toPublicPath } = require('../services/fileService');
 const { ensureDocumentPreview } = require('../services/documentPreviewService');
 const { normalizeScope } = require('../services/scopeService');
+const { imageDir } = require('../config/env');
 
 function cleanOptionalText(value, maxLength) {
   const cleaned = String(value || '').replace(/\s+/g, ' ').trim();
@@ -88,7 +90,7 @@ async function uploadDocument(req, res, next) {
 async function listDocuments(req, res, next) {
   try {
     const [documents] = await pool.execute(
-      `SELECT d.id, d.title, d.file_path, d.created_at,
+      `SELECT d.id, d.title, d.file_path, d.preview_file_path, d.created_at,
               COALESCE(login_user.name, api_user.name) AS uploaded_by,
               d.site_scope,
               d.topic_category,
@@ -99,7 +101,7 @@ async function listDocuments(req, res, next) {
        LEFT JOIN users login_user ON login_user.id = d.uploaded_by_user_id
        LEFT JOIN api_account api_user ON api_user.id = d.uploaded_by
        LEFT JOIN document_images di ON di.document_id = d.id
-       GROUP BY d.id, d.title, d.file_path, d.site_scope, d.topic_category, d.suggested_prompt, d.show_as_topic, d.created_at, login_user.name, api_user.name
+       GROUP BY d.id, d.title, d.file_path, d.preview_file_path, d.site_scope, d.topic_category, d.suggested_prompt, d.show_as_topic, d.created_at, login_user.name, api_user.name
        ORDER BY d.created_at DESC`
     );
 
@@ -212,7 +214,7 @@ async function getDocument(req, res, next) {
        LEFT JOIN api_account api_user ON api_user.id = d.uploaded_by
        LEFT JOIN document_images di ON di.document_id = d.id
        WHERE d.id = ?
-       GROUP BY d.id, d.title, d.file_path, d.site_scope, d.topic_category, d.suggested_prompt, d.show_as_topic, d.created_at, login_user.name, api_user.name
+       GROUP BY d.id, d.title, d.file_path, d.preview_file_path, d.site_scope, d.topic_category, d.suggested_prompt, d.show_as_topic, d.created_at, login_user.name, api_user.name
        LIMIT 1`,
       [id]
     );
@@ -229,13 +231,63 @@ async function getDocument(req, res, next) {
        ORDER BY page_number ASC`,
       [id]
     );
-    const [images] = await pool.execute(
+    let [images] = await pool.execute(
       `SELECT id, image_path, page_number
        FROM document_images
        WHERE document_id = ?
        ORDER BY page_number ASC, id ASC`,
       [id]
     );
+    let imageCaptureError = '';
+    const imagePreviewExtensions = new Set(['.pdf', '.doc', '.docx']);
+
+    if (!images.length && imagePreviewExtensions.has(path.extname(document.file_path || '').toLowerCase())) {
+      try {
+        const captureResult = await processImagesForDocument({
+          documentId: document.id,
+          filePath: document.file_path,
+          pageCount: Math.max(textPages.length, 1)
+        });
+
+        [images] = await pool.execute(
+          `SELECT id, image_path, page_number
+           FROM document_images
+           WHERE document_id = ?
+           ORDER BY page_number ASC, id ASC`,
+          [id]
+        );
+
+        if (!images.length && captureResult.failedPages > 0) {
+          imageCaptureError = `Captured document pages could not be generated: ${captureResult.failureMessage || 'page image conversion failed.'}`;
+        }
+      } catch (error) {
+        imageCaptureError = `Captured document pages could not be generated: ${error.message}`;
+        console.error(`Document ${document.id} page capture failed:`, error.message);
+      }
+    }
+
+    let previewFilePath = document.preview_file_path || '';
+    let previewError = '';
+
+    if (!previewFilePath) {
+      try {
+        const preview = await ensureDocumentPreview({
+          documentId: document.id,
+          filePath: document.file_path
+        });
+
+        previewFilePath = preview.previewFilePath || '';
+
+        if (previewFilePath && previewFilePath !== document.file_path) {
+          await pool.execute(
+            'UPDATE documents SET preview_file_path = ? WHERE id = ?',
+            [previewFilePath, document.id]
+          );
+        }
+      } catch (error) {
+        previewError = error.message;
+      }
+    }
 
     return res.json({
       document: {
@@ -243,13 +295,16 @@ async function getDocument(req, res, next) {
         title: document.title,
         filePath: document.file_path,
         fileUrl: `/${toPublicPath(document.file_path)}`,
+        previewFileUrl: previewFilePath ? `/${toPublicPath(previewFilePath)}` : '',
+        previewError,
         siteScope: document.site_scope,
         topicCategory: document.topic_category,
         suggestedPrompt: document.suggested_prompt,
         showAsTopic: Boolean(document.show_as_topic),
         uploadedBy: document.uploaded_by,
         createdAt: document.created_at,
-        imageCount: Number(document.image_count || 0),
+        imageCount: images.length || Number(document.image_count || 0),
+        imageCaptureError,
         textPages: textPages.map((page) => ({
           pageNumber: page.page_number,
           content: page.content
@@ -266,10 +321,67 @@ async function getDocument(req, res, next) {
   }
 }
 
+async function saveCapturedDocumentPage(req, res, next) {
+  try {
+    const documentId = Number(req.params.id);
+    const pageNumber = Number(req.body.pageNumber);
+
+    if (!documentId || !pageNumber || pageNumber < 1) {
+      return res.status(400).json({ message: 'Document ID and page number are required.' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ message: 'Captured page image is required.' });
+    }
+
+    if (!['image/png', 'image/jpeg'].includes(req.file.mimetype)) {
+      return res.status(415).json({ message: 'Captured page must be a PNG or JPEG image.' });
+    }
+
+    const [documents] = await pool.execute(
+      'SELECT id FROM documents WHERE id = ? LIMIT 1',
+      [documentId]
+    );
+
+    if (!documents[0]) {
+      return res.status(404).json({ message: 'Document was not found.' });
+    }
+
+    const extension = req.file.mimetype === 'image/jpeg' ? '.jpg' : '.png';
+    const documentImageDir = path.join(imageDir, String(documentId));
+    const imagePath = path.join(documentImageDir, `page-${String(pageNumber).padStart(3, '0')}${extension}`);
+    const relativeImagePath = path.relative(path.resolve(__dirname, '..', '..'), imagePath);
+
+    await fs.mkdir(documentImageDir, { recursive: true });
+    await fs.writeFile(imagePath, req.file.buffer);
+    await pool.execute(
+      'DELETE FROM document_images WHERE document_id = ? AND page_number = ?',
+      [documentId, pageNumber]
+    );
+    const [result] = await pool.execute(
+      `INSERT INTO document_images (document_id, image_path, page_number, ocr_text)
+       VALUES (?, ?, ?, NULL)`,
+      [documentId, relativeImagePath, pageNumber]
+    );
+
+    return res.status(201).json({
+      image: {
+        id: result.insertId,
+        documentId,
+        pageNumber,
+        url: `/${toPublicPath(relativeImagePath)}`
+      }
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   getDocument,
   getLibraryDocumentPreview,
   listLibraryDocuments,
+  saveCapturedDocumentPage,
   uploadDocument,
   listDocuments
 };

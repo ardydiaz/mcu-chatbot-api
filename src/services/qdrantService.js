@@ -3,6 +3,7 @@ const {
   qdrantApiKey,
   qdrantCollection,
   qdrantEnabled,
+  qdrantRequestTimeoutMs,
   qdrantUrl
 } = require('../config/env');
 const { generateEmbeddingWithOllama } = require('./ollamaService');
@@ -84,20 +85,28 @@ function buildPointId(documentId, pageNumber, chunkIndex) {
 }
 
 async function qdrantFetch(pathname, options = {}) {
-  const response = await fetch(buildQdrantUrl(pathname), {
-    ...options,
-    headers: {
-      ...getQdrantHeaders(),
-      ...(options.headers || {})
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), qdrantRequestTimeoutMs);
+
+  try {
+    const response = await fetch(buildQdrantUrl(pathname), {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        ...getQdrantHeaders(),
+        ...(options.headers || {})
+      }
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`Qdrant ${response.status}: ${text || response.statusText}`);
     }
-  });
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`Qdrant ${response.status}: ${text || response.statusText}`);
+    return response.json().catch(() => ({}));
+  } finally {
+    clearTimeout(timeout);
   }
-
-  return response.json().catch(() => ({}));
 }
 
 async function ensureCollection(vectorSize) {

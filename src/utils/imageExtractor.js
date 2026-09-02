@@ -3,7 +3,7 @@ const path = require('path');
 const zlib = require('zlib');
 const { promisify } = require('util');
 const { fromPath } = require('pdf2pic');
-const { imageDir } = require('../config/env');
+const { imageDir, pdf2picGmClass } = require('../config/env');
 
 const inflateRaw = promisify(zlib.inflateRaw);
 
@@ -16,6 +16,10 @@ async function convertWithPdf2pic(filePath, documentImageDir, pageNumber) {
     width: 1000,
     height: 1400
   });
+
+  if (pdf2picGmClass) {
+    converter.setGMClass(pdf2picGmClass === 'true' ? true : pdf2picGmClass);
+  }
 
   const page = await converter(pageNumber, { responseType: 'image' });
   return page.path;

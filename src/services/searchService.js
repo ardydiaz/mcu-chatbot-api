@@ -1,4 +1,6 @@
+const path = require('path');
 const pool = require('../utils/db');
+const { fastDatabaseAnswers } = require('../config/env');
 const { toPublicPath } = require('./fileService');
 const {
   generateGeneralAnswerWithOllama,
@@ -6,6 +8,7 @@ const {
   generateStructuredOfficialAnswerWithOllama
 } = require('./ollamaService');
 const { searchSemanticDocuments } = require('./qdrantService');
+const { ensureDocumentPreview } = require('./documentPreviewService');
 
 function getSearchTerms(question) {
   const stopWords = new Set([
@@ -944,6 +947,84 @@ async function hydrateMatchesWithFullPageContent(matches) {
   });
 }
 
+async function getPagePreviewAttachments(matches, pageImages = []) {
+  const attachmentsByPage = new Map();
+
+  pageImages.forEach((image) => {
+    const key = `${image.document_id}:${image.page_number}`;
+
+    attachmentsByPage.set(key, {
+      documentId: image.document_id,
+      title: image.title,
+      pageNumber: image.page_number,
+      url: `/${toPublicPath(image.image_path)}`,
+      previewType: 'image'
+    });
+  });
+
+  const missingMatches = matches.filter((match) => !attachmentsByPage.has(`${match.document_id}:${match.page_number}`));
+
+  if (!missingMatches.length) {
+    return [...attachmentsByPage.values()];
+  }
+
+  const documentIds = [...new Set(missingMatches.map((match) => match.document_id))];
+  const placeholders = documentIds.map(() => '?').join(',');
+  const [documents] = await pool.execute(
+    `SELECT id, title, file_path, preview_file_path
+     FROM documents
+     WHERE id IN (${placeholders})`,
+    documentIds
+  );
+  const documentById = new Map(documents.map((document) => [Number(document.id), document]));
+
+  for (const match of missingMatches) {
+    const document = documentById.get(Number(match.document_id));
+
+    if (!document) {
+      continue;
+    }
+
+    let previewFilePath = document.preview_file_path || '';
+
+    if (!previewFilePath) {
+      try {
+        const preview = await ensureDocumentPreview({
+          documentId: document.id,
+          filePath: document.file_path
+        });
+
+        previewFilePath = preview.previewFilePath || '';
+
+        if (previewFilePath && previewFilePath !== document.file_path) {
+          await pool.execute(
+            'UPDATE documents SET preview_file_path = ? WHERE id = ?',
+            [previewFilePath, document.id]
+          );
+        }
+      } catch (error) {
+        console.warn(`Document ${document.id} page preview fallback failed:`, error.message);
+      }
+    }
+
+    if (!previewFilePath || path.extname(previewFilePath).toLowerCase() !== '.pdf') {
+      continue;
+    }
+
+    attachmentsByPage.set(`${match.document_id}:${match.page_number}`, {
+      documentId: match.document_id,
+      title: match.title || document.title,
+      pageNumber: match.page_number,
+      url: `/${toPublicPath(previewFilePath)}`,
+      previewType: 'pdf_page'
+    });
+  }
+
+  return matches
+    .map((match) => attachmentsByPage.get(`${match.document_id}:${match.page_number}`))
+    .filter(Boolean);
+}
+
 async function getDocumentPageMatches(documentId, maxPages = 30) {
   if (!documentId) {
     return [];
@@ -1185,7 +1266,10 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
      LIMIT 25`,
     [scope, question, likeQuery]
   );
-  const semanticRows = await searchSemanticDocuments(question, { scope });
+  const shouldUseSemanticSearch = titleRows.length === 0 && exactPhraseRows.length === 0 && broadRows.length === 0;
+  const semanticRows = shouldUseSemanticSearch
+    ? await searchSemanticDocuments(question, { scope })
+    : [];
   const dedupedRows = new Map();
   [...titleRows, ...exactPhraseRows, ...semanticRows, ...broadRows].forEach((row) => {
     dedupedRows.set(`${row.document_id}:${row.page_number}`, row);
@@ -1344,6 +1428,7 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
     const rankedMatchByPage = new Map(
       hydratedRankedMatches.map((match) => [`${match.document_id}:${match.page_number}`, match])
     );
+    const pagePreviewAttachments = await getPagePreviewAttachments(hydratedRankedMatches, pageImages);
 
     const officialAnswer = buildOfficialTextAnswer(hydratedRankedMatches, {
       question,
@@ -1366,21 +1451,25 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
         : buildOfficialTextBlocks(hydratedRankedMatches);
       answerMode = 'database_text_exact_overview';
     } else {
-      answerBlocks = await generateStructuredOfficialAnswerWithOllama({
-        question,
-        officialText: officialAnswer,
-        detailLevel: 'compact'
-      });
-      answerMode = answerBlocks
-        ? 'database_text_structured_with_ollama'
-        : 'database_text';
+      if (!fastDatabaseAnswers) {
+        answerBlocks = await generateStructuredOfficialAnswerWithOllama({
+          question,
+          officialText: officialAnswer,
+          detailLevel: 'compact'
+        });
+        answerMode = answerBlocks
+          ? 'database_text_structured_with_ollama'
+          : 'database_text';
+      }
     }
 
     if (!answerBlocks) {
-      const officialSummary = await generateOfficialTextSummaryWithOllama({
-        question,
-        officialText: officialAnswer
-      });
+      const officialSummary = fastDatabaseAnswers
+        ? null
+        : await generateOfficialTextSummaryWithOllama({
+          question,
+          officialText: officialAnswer
+        });
       const displayOfficialAnswer = officialSummary
         ? getConciseOfficialExcerpt(officialAnswer)
         : getTruncatedText(officialAnswer, useCompleteDocumentOverview ? 5200 : 2200);
@@ -1407,13 +1496,10 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
       }),
       answerBlocks,
       answerMode,
-      images: pageImages.map((image) => ({
-        documentId: image.document_id,
-        title: image.title,
-        pageNumber: image.page_number,
-        printedPageNumber: rankedMatchByPage.get(`${image.document_id}:${image.page_number}`)?.printedPageNumber,
-        pageLabel: rankedMatchByPage.get(`${image.document_id}:${image.page_number}`)?.pageLabel,
-        url: `/${toPublicPath(image.image_path)}`
+      images: pagePreviewAttachments.map((attachment) => ({
+        ...attachment,
+        printedPageNumber: rankedMatchByPage.get(`${attachment.documentId}:${attachment.pageNumber}`)?.printedPageNumber,
+        pageLabel: rankedMatchByPage.get(`${attachment.documentId}:${attachment.pageNumber}`)?.pageLabel
       })),
       sources: hydratedRankedMatches.map((match) => ({
         documentId: match.document_id,

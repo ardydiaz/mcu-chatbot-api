@@ -83,6 +83,15 @@ OLLAMA_REQUEST_TIMEOUT_MS=30000
 
 If Ollama is offline or times out, the API falls back to the older extractive document answer so the chatbot still responds.
 
+For faster official document answers, keep database answers in fast mode. This skips optional Ollama rewriting when the uploaded documents already contain the answer:
+
+```env
+FAST_DATABASE_ANSWERS=true
+QDRANT_REQUEST_TIMEOUT_MS=1500
+```
+
+Set `FAST_DATABASE_ANSWERS=false` only if you prefer slower AI-rewritten answers over speed.
+
 ## Qdrant Semantic Search
 
 Qdrant improves document retrieval by matching meaning, not only exact keywords. MySQL remains the main database, while Qdrant stores document text vectors.
@@ -148,6 +157,29 @@ OCR_LANGUAGE=eng
 ```
 
 If Tesseract is not installed, document upload still works, but image OCR text is skipped and a warning is logged.
+
+## Document Page Capture
+
+The admin document preview uses `pdf2pic` to render uploaded PDF/DOC/DOCX pages into PNG files under `storage/images`.
+This requires native rendering tools on the backend machine.
+
+On Windows, install GraphicsMagick and Ghostscript, then restart the API. If you use ImageMagick instead of GraphicsMagick, set:
+
+```env
+PDF2PIC_GM_CLASS=true
+```
+
+For Word files, install LibreOffice or set the converter path:
+
+```env
+OFFICE_CONVERTER_COMMAND=C:\Program Files\LibreOffice\program\soffice.exe
+```
+
+If an existing document still shows `Images 0` after installing the tools, reprocess it:
+
+```bash
+npm run images:reprocess -- <documentId>
+```
 
 ## Main API Routes
 

@@ -1,5 +1,7 @@
 const pool = require('../utils/db');
+const fs = require('fs/promises');
 const path = require('path');
+const pdfParse = require('pdf-parse');
 const { extractDocumentText } = require('../utils/documentParser');
 const { extractImages } = require('../utils/imageExtractor');
 const { extractTextFromImage } = require('./ocrService');
@@ -16,11 +18,47 @@ function buildOcrSection(pageNumber, texts) {
   return `OCR extracted text from embedded images on page ${pageNumber}:\n${content}`;
 }
 
+async function getPdfPageCount(filePath, fallbackPageCount) {
+  try {
+    const buffer = await fs.readFile(filePath);
+    const data = await pdfParse(buffer);
+    return Number(data.numpages || fallbackPageCount || 1);
+  } catch (error) {
+    console.warn(`Unable to count PDF pages for image extraction: ${error.message}`);
+    return Number(fallbackPageCount || 1);
+  }
+}
+
+async function getImageExtractionSource({ documentId, filePath, pageCount }) {
+  const extension = path.extname(filePath).toLowerCase();
+
+  if (['.doc', '.docx'].includes(extension)) {
+    const preview = await ensureDocumentPreview({ documentId, filePath });
+
+    if (preview.previewType === 'pdf' && preview.previewFilePath) {
+      return {
+        filePath: preview.previewFilePath,
+        pageCount: await getPdfPageCount(preview.previewFilePath, pageCount)
+      };
+    }
+  }
+
+  return {
+    filePath,
+    pageCount
+  };
+}
+
 async function processImagesForDocument({ documentId, filePath, pageCount }) {
   let savedImages = 0;
   const ocrTextsByPage = new Map();
+  const imageSource = await getImageExtractionSource({
+    documentId,
+    filePath,
+    pageCount
+  });
 
-  const extractionResult = await extractImages(filePath, documentId, pageCount, {
+  const extractionResult = await extractImages(imageSource.filePath, documentId, imageSource.pageCount, {
     async onImage(image) {
       const absoluteImagePath = path.resolve(__dirname, '..', '..', image.imagePath);
       const ocrText = await extractTextFromImage(absoluteImagePath);
@@ -72,6 +110,7 @@ async function processImagesForDocument({ documentId, filePath, pageCount }) {
   return {
     images: savedImages || images.length,
     failedPages: failedPages.length,
+    failureMessage: failedPages[0]?.message || '',
     ocrImages: [...ocrTextsByPage.values()].reduce((total, texts) => total + texts.length, 0)
   };
 }
@@ -91,7 +130,7 @@ async function processDocument({
   let documentId;
   let pages = [];
   const extension = path.extname(originalName || filePath).toLowerCase();
-  const supportsImageExtraction = ['.pdf', '.docx'].includes(extension);
+  const supportsImageExtraction = ['.pdf', '.doc', '.docx'].includes(extension);
 
   try {
     await connection.beginTransaction();
@@ -128,8 +167,10 @@ async function processDocument({
         pageCount: pages.length
       })
         .then((result) => {
+          const failureDetails = result.failureMessage ? ` First error: ${result.failureMessage}` : '';
+
           console.log(
-            `Document ${documentId} image extraction complete: ${result.images} saved, ${result.ocrImages} OCR results, ${result.failedPages} failed.`
+            `Document ${documentId} image extraction complete: ${result.images} saved, ${result.ocrImages} OCR results, ${result.failedPages} failed.${failureDetails}`
           );
         })
         .catch((error) => {
