@@ -949,26 +949,7 @@ async function hydrateMatchesWithFullPageContent(matches) {
 
 async function getPagePreviewAttachments(matches, pageImages = []) {
   const attachmentsByPage = new Map();
-
-  pageImages.forEach((image) => {
-    const key = `${image.document_id}:${image.page_number}`;
-
-    attachmentsByPage.set(key, {
-      documentId: image.document_id,
-      title: image.title,
-      pageNumber: image.page_number,
-      url: `/${toPublicPath(image.image_path)}`,
-      previewType: 'image'
-    });
-  });
-
-  const missingMatches = matches.filter((match) => !attachmentsByPage.has(`${match.document_id}:${match.page_number}`));
-
-  if (!missingMatches.length) {
-    return [...attachmentsByPage.values()];
-  }
-
-  const documentIds = [...new Set(missingMatches.map((match) => match.document_id))];
+  const documentIds = [...new Set(matches.map((match) => match.document_id))];
   const placeholders = documentIds.map(() => '?').join(',');
   const [documents] = await pool.execute(
     `SELECT id, title, file_path, preview_file_path
@@ -978,7 +959,7 @@ async function getPagePreviewAttachments(matches, pageImages = []) {
   );
   const documentById = new Map(documents.map((document) => [Number(document.id), document]));
 
-  for (const match of missingMatches) {
+  for (const match of matches) {
     const document = documentById.get(Number(match.document_id));
 
     if (!document) {
@@ -1019,6 +1000,22 @@ async function getPagePreviewAttachments(matches, pageImages = []) {
       previewType: 'pdf_page'
     });
   }
+
+  pageImages.forEach((image) => {
+    const key = `${image.document_id}:${image.page_number}`;
+
+    if (attachmentsByPage.has(key)) {
+      return;
+    }
+
+    attachmentsByPage.set(key, {
+      documentId: image.document_id,
+      title: image.title,
+      pageNumber: image.page_number,
+      url: `/${toPublicPath(image.image_path)}`,
+      previewType: 'image'
+    });
+  });
 
   return matches
     .map((match) => attachmentsByPage.get(`${match.document_id}:${match.page_number}`))
