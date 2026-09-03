@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const swaggerUi = require('swagger-ui-express');
-const { clientUrls } = require('./config/env');
+const { clientUrls, imageDir, previewDir, uploadDir } = require('./config/env');
 const swaggerSpec = require('./config/swagger');
 const authRoutes = require('./routes/authRoutes');
 const chatLogRoutes = require('./routes/chatLogRoutes');
@@ -29,9 +29,9 @@ app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '256kb' }));
 app.use('/vendor/pdfjs', express.static(path.resolve(__dirname, '..', 'node_modules/pdf-parse/lib/pdf.js/v2.0.550/build')));
-app.use('/storage/images', express.static(path.resolve(__dirname, '..', 'storage/images')));
-app.use('/storage/uploads', express.static(path.resolve(__dirname, '..', 'storage/uploads')));
-app.use('/storage/previews', express.static(path.resolve(__dirname, '..', 'storage/previews')));
+app.use('/storage/images', express.static(imageDir));
+app.use('/storage/uploads', express.static(uploadDir));
+app.use('/storage/previews', express.static(previewDir));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.get('/health', (req, res) => {
