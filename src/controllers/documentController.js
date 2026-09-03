@@ -164,7 +164,7 @@ async function getLibraryDocumentPreview(req, res, next) {
 
     if (document.preview_file_path) {
       return res.json({
-        previewFileUrl: `/${toPublicPath(document.preview_file_path)}`,
+        previewFileUrl: `/api/documents/${document.id}/preview-file`,
         originalFileUrl: `/${toPublicPath(document.file_path)}`,
         generated: false
       });
@@ -189,7 +189,7 @@ async function getLibraryDocumentPreview(req, res, next) {
     }
 
     return res.json({
-      previewFileUrl: `/${toPublicPath(preview.previewFilePath)}`,
+      previewFileUrl: `/api/documents/${document.id}/preview-file`,
       originalFileUrl: `/${toPublicPath(document.file_path)}`,
       generated: preview.generated
     });
@@ -295,7 +295,7 @@ async function getDocument(req, res, next) {
         title: document.title,
         filePath: document.file_path,
         fileUrl: `/${toPublicPath(document.file_path)}`,
-        previewFileUrl: previewFilePath ? `/${toPublicPath(previewFilePath)}` : '',
+        previewFileUrl: previewFilePath ? `/api/documents/${document.id}/preview-file` : '',
         previewError,
         siteScope: document.site_scope,
         topicCategory: document.topic_category,
@@ -377,11 +377,65 @@ async function saveCapturedDocumentPage(req, res, next) {
   }
 }
 
+async function streamDocumentPreview(req, res, next) {
+  try {
+    const { id } = req.params;
+    const [rows] = await pool.execute(
+      `SELECT id, file_path, preview_file_path
+       FROM documents
+       WHERE id = ?
+       LIMIT 1`,
+      [id]
+    );
+    const document = rows[0];
+
+    if (!document) {
+      return res.status(404).send('Document was not found.');
+    }
+
+    let previewFilePath = document.preview_file_path || '';
+
+    if (!previewFilePath) {
+      const preview = await ensureDocumentPreview({
+        documentId: document.id,
+        filePath: document.file_path
+      });
+
+      previewFilePath = preview.previewFilePath || '';
+
+      if (previewFilePath && previewFilePath !== document.file_path) {
+        await pool.execute(
+          'UPDATE documents SET preview_file_path = ? WHERE id = ?',
+          [previewFilePath, document.id]
+        );
+      }
+    }
+
+    if (!previewFilePath) {
+      return res.status(422).send('This file type cannot be previewed in the browser.');
+    }
+
+    const previewExtension = path.extname(previewFilePath).toLowerCase();
+
+    await fs.access(previewFilePath);
+    res.setHeader('Content-Type', previewExtension === '.txt' ? 'text/plain; charset=utf-8' : 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline');
+    return res.sendFile(path.resolve(previewFilePath));
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return res.status(404).send('Preview file was not found on the server.');
+    }
+
+    return next(error);
+  }
+}
+
 module.exports = {
   getDocument,
   getLibraryDocumentPreview,
   listLibraryDocuments,
   saveCapturedDocumentPage,
+  streamDocumentPreview,
   uploadDocument,
   listDocuments
 };

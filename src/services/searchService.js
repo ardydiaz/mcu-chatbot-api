@@ -1015,7 +1015,7 @@ async function getPagePreviewAttachments(matches, pageImages = []) {
       documentId: match.document_id,
       title: match.title || document.title,
       pageNumber: match.page_number,
-      url: `/${toPublicPath(previewFilePath)}`,
+      url: `/api/documents/${document.id}/preview-file`,
       previewType: 'pdf_page'
     });
   }

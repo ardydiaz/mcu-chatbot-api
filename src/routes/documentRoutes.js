@@ -5,6 +5,7 @@ const {
   getLibraryDocumentPreview,
   listLibraryDocuments,
   saveCapturedDocumentPage,
+  streamDocumentPreview,
   uploadDocument,
   listDocuments
 } = require('../controllers/documentController');
@@ -80,6 +81,7 @@ router.get('/library', authenticate, listLibraryDocuments);
  *         description: File type cannot be previewed in the browser
  */
 router.get('/library/:id/preview', authenticate, getLibraryDocumentPreview);
+router.get('/:id/preview-file', streamDocumentPreview);
 
 /**
  * @swagger
