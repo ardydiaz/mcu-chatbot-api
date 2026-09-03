@@ -1,7 +1,6 @@
 const path = require('path');
 const pool = require('../utils/db');
 const { fastDatabaseAnswers } = require('../config/env');
-const { toPublicPath } = require('./fileService');
 const {
   generateGeneralAnswerWithOllama,
   generateOfficialTextSummaryWithOllama,
@@ -947,7 +946,7 @@ async function hydrateMatchesWithFullPageContent(matches) {
   });
 }
 
-async function getPagePreviewAttachments(matches, pageImages = []) {
+async function getPagePreviewAttachments(matches) {
   const attachmentsByPage = new Map();
   const documentIds = [...new Set(matches.map((match) => match.document_id))];
   const placeholders = documentIds.map(() => '?').join(',');
@@ -1000,22 +999,6 @@ async function getPagePreviewAttachments(matches, pageImages = []) {
       previewType: 'pdf_page'
     });
   }
-
-  pageImages.forEach((image) => {
-    const key = `${image.document_id}:${image.page_number}`;
-
-    if (attachmentsByPage.has(key)) {
-      return;
-    }
-
-    attachmentsByPage.set(key, {
-      documentId: image.document_id,
-      title: image.title,
-      pageNumber: image.page_number,
-      url: `/${toPublicPath(image.image_path)}`,
-      previewType: 'image'
-    });
-  });
 
   return matches
     .map((match) => attachmentsByPage.get(`${match.document_id}:${match.page_number}`))
@@ -1409,23 +1392,10 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
     if (hydratedRankedMatches.length === 0) {
       return buildNoMatchAnswer({ question });
     }
-    const imageConditions = hydratedRankedMatches
-      .map(() => '(di.document_id = ? AND di.page_number = ?)')
-      .join(' OR ');
-    const imageParams = hydratedRankedMatches.flatMap((match) => [match.document_id, match.page_number]);
-    const [pageImages] = imageConditions
-      ? await pool.execute(
-        `SELECT di.document_id, di.page_number, di.image_path, d.title
-         FROM document_images di
-         JOIN documents d ON d.id = di.document_id
-         WHERE ${imageConditions}`,
-        imageParams
-      )
-      : [[]];
     const rankedMatchByPage = new Map(
       hydratedRankedMatches.map((match) => [`${match.document_id}:${match.page_number}`, match])
     );
-    const pagePreviewAttachments = await getPagePreviewAttachments(hydratedRankedMatches, pageImages);
+    const pagePreviewAttachments = await getPagePreviewAttachments(hydratedRankedMatches);
 
     const officialAnswer = buildOfficialTextAnswer(hydratedRankedMatches, {
       question,
