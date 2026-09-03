@@ -81,6 +81,18 @@ function addPageMetadata(match) {
   };
 }
 
+function buildSourceReference(match) {
+  return {
+    documentId: match.document_id,
+    title: match.title,
+    pageNumber: match.page_number,
+    printedPageNumber: match.printedPageNumber,
+    pageLabel: match.pageLabel,
+    previewFileUrl: `/api/documents/${match.document_id}/preview-file`,
+    previewType: 'pdf_page'
+  };
+}
+
 function isLikelyTableOfContents(match) {
   const lines = String(match.content || '')
     .split('\n')
@@ -442,13 +454,7 @@ function buildContactAnswer(matches, question) {
     ],
     answerMode: 'database_text',
     images: [],
-    sources: matches.slice(0, 3).map((match) => ({
-      documentId: match.document_id,
-      title: match.title,
-      pageNumber: match.page_number,
-      printedPageNumber: match.printedPageNumber,
-      pageLabel: match.pageLabel
-    }))
+    sources: matches.slice(0, 3).map(buildSourceReference)
   };
 }
 
@@ -494,13 +500,7 @@ function buildAddressAnswer(matches) {
     ],
     answerMode: 'database_text',
     images: [],
-    sources: matches.slice(0, 3).map((match) => ({
-      documentId: match.document_id,
-      title: match.title,
-      pageNumber: match.page_number,
-      printedPageNumber: match.printedPageNumber,
-      pageLabel: match.pageLabel
-    }))
+    sources: matches.slice(0, 3).map(buildSourceReference)
   };
 }
 
@@ -1501,13 +1501,7 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
         printedPageNumber: rankedMatchByPage.get(`${attachment.documentId}:${attachment.pageNumber}`)?.printedPageNumber,
         pageLabel: rankedMatchByPage.get(`${attachment.documentId}:${attachment.pageNumber}`)?.pageLabel
       })),
-      sources: hydratedRankedMatches.map((match) => ({
-        documentId: match.document_id,
-        title: match.title,
-        pageNumber: match.page_number,
-        printedPageNumber: match.printedPageNumber,
-        pageLabel: match.pageLabel
-      }))
+      sources: hydratedRankedMatches.map(buildSourceReference)
     };
   }
 
