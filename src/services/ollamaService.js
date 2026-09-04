@@ -210,6 +210,8 @@ function buildStructuredOfficialPrompt({ question, officialText, detailLevel = '
     'Preserve important exact wording, button names, website links, requirements, and steps from the official text.',
     'Do not include raw unorganized page dumps. Combine broken wrapped lines into readable sentences.',
     'Use short sections with clear titles. Use lists for requirements, steps, qualifications, terms, statistics, or grouped facts.',
+    'For "what is", "what are", "explain", or definition-style questions, give a direct explanation first, then only the most important characteristics, purpose, or next actions.',
+    'Do not copy the whole extracted document into the answer unless the student clearly asks for the full, complete, whole, or entire document.',
     isCompleteOverview
       ? 'The student is asking about the whole matched document or guide. Include all major relevant sections from the official text, but keep each section concise and readable.'
       : 'Keep the response useful but compact. Include only the sections that directly answer the student question.',

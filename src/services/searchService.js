@@ -2,7 +2,6 @@ const path = require('path');
 const pool = require('../utils/db');
 const { fastDatabaseAnswers } = require('../config/env');
 const {
-  generateGeneralAnswerWithOllama,
   generateOfficialTextSummaryWithOllama,
   generateStructuredOfficialAnswerWithOllama
 } = require('./ollamaService');
@@ -518,37 +517,6 @@ function buildNoOfficialMatchAnswer() {
   };
 }
 
-async function buildNoMatchAnswer({ question }) {
-  const generalAnswer = await generateGeneralAnswerWithOllama({ question });
-
-  if (!generalAnswer) {
-    return buildNoOfficialMatchAnswer();
-  }
-
-  const answer = [
-    'I could not find this in the uploaded official university documents, but here is a general MCU answer:',
-    '',
-    generalAnswer
-  ].join('\n');
-
-  return {
-    answer,
-    answerBlocks: [
-      {
-        type: 'p',
-        text: 'I could not find this in the uploaded official university documents, but here is a general MCU answer:'
-      },
-      {
-        type: 'p',
-        text: generalAnswer
-      }
-    ],
-    answerMode: 'general_ai',
-    images: [],
-    sources: []
-  };
-}
-
 function buildExtractiveAnswer(matches) {
   return matches
     .map((match) => `${match.title}, page ${match.page_number}: ${match.content.slice(0, 700)}`)
@@ -732,6 +700,22 @@ function isDocumentOverviewQuestion(question) {
   const normalized = normalizeText(question);
 
   return /^(what is|what are|tell me about|explain|describe|overview of|give me|show me)\b/.test(normalized);
+}
+
+function isDefinitionStyleQuestion(question) {
+  const normalized = normalizeText(question);
+
+  return /^(what is|what are|define|meaning of|explain what)\b/.test(normalized);
+}
+
+function isCompleteDocumentRequest(question) {
+  const normalized = normalizeText(question);
+
+  return (
+    /\b(full|complete|entire|whole|all)\b.*\b(document|file|guide|procedure|content|text|data)\b/.test(normalized) ||
+    /\b(show|display|give|view|open)\b.*\b(full|complete|entire|whole|all)\b/.test(normalized) ||
+    /\b(all|complete|full)\s+(steps|requirements|procedures|guidelines|details)\b/.test(normalized)
+  );
 }
 
 function hasTitleOverviewMatch(matches, exactSearchPhrase, question) {
@@ -1180,6 +1164,46 @@ function buildHybridOfficialAnswer({ summary, officialText }) {
   return [summary, officialText].join('\n\n');
 }
 
+function trimDefinitionAnswerBlocks(blocks) {
+  if (!Array.isArray(blocks) || blocks.length <= 4) {
+    return blocks;
+  }
+
+  const trimmedBlocks = [];
+  let sectionCount = 0;
+
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
+
+    if (block.type === 'paragraph' && block.variant === 'summary') {
+      trimmedBlocks.push(block);
+      continue;
+    }
+
+    if (block.type === 'heading') {
+      if (sectionCount >= 2) {
+        break;
+      }
+
+      trimmedBlocks.push(block);
+      sectionCount += 1;
+      continue;
+    }
+
+    if (block.type === 'list') {
+      trimmedBlocks.push({
+        ...block,
+        items: block.items.slice(0, 5)
+      });
+      continue;
+    }
+
+    trimmedBlocks.push(block);
+  }
+
+  return trimmedBlocks.length > 0 ? trimmedBlocks : blocks.slice(0, 4);
+}
+
 async function searchDocuments(question, { scope = 'general' } = {}) {
   const likeQuery = `%${question}%`;
   const terms = getSearchTerms(question);
@@ -1191,7 +1215,7 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
   const intentRule = detectQuestionIntent(question);
 
   if (!intentRule && isLikelyGeneralTechnologyQuestion(question)) {
-    return buildNoMatchAnswer({ question });
+    return buildNoOfficialMatchAnswer();
   }
 
   if (terms.length === 0 && exactSearchPhrase.length < 3) {
@@ -1262,7 +1286,7 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
       .map(addPageMetadata);
 
     if (enrichedMatches.length === 0) {
-      return buildNoMatchAnswer({ question });
+      return buildNoOfficialMatchAnswer();
     }
 
     if (leadershipQuestion) {
@@ -1349,7 +1373,7 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
         return buildNoOfficialMatchAnswer();
       }
 
-      return buildNoMatchAnswer({ question });
+      return buildNoOfficialMatchAnswer();
     }
 
     if (isContactQuestion(question)) {
@@ -1373,7 +1397,7 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
     }
 
     const overviewDocumentId = getTitleOverviewDocumentId(candidateMatches, exactSearchPhrase, question);
-    const useCompleteDocumentOverview = Boolean(overviewDocumentId);
+    const useCompleteDocumentOverview = Boolean(overviewDocumentId) && isCompleteDocumentRequest(question);
     const maxRankedMatches = isGenericInstitutionQuery(normalizedExactPhrase, terms)
       ? 1
       : useCompleteDocumentOverview ? 6 : 2;
@@ -1390,7 +1414,7 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
       : await hydrateMatchesWithFullPageContent(rankedMatches);
 
     if (hydratedRankedMatches.length === 0) {
-      return buildNoMatchAnswer({ question });
+      return buildNoOfficialMatchAnswer();
     }
     const rankedMatchByPage = new Map(
       hydratedRankedMatches.map((match) => [`${match.document_id}:${match.page_number}`, match])
@@ -1405,41 +1429,48 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
     let answerBlocks = null;
     let answerMode = 'database_text';
 
-    if (useCompleteDocumentOverview) {
-      const exactOfficialAnswer = getTruncatedText(officialAnswer, 12000);
+    answerBlocks = await generateStructuredOfficialAnswerWithOllama({
+      question,
+      officialText: officialAnswer,
+      detailLevel: useCompleteDocumentOverview ? 'complete' : 'compact'
+    });
+    answerMode = answerBlocks
+      ? useCompleteDocumentOverview
+        ? 'database_text_complete_structured_with_ollama'
+        : 'database_text_structured_with_ollama'
+      : 'database_text';
 
-      answerBlocks = exactOfficialAnswer.text
-        ? [{
-          type: 'preformatted',
-          text: exactOfficialAnswer.text,
-          fullText: exactOfficialAnswer.fullText,
-          isTruncated: exactOfficialAnswer.isTruncated
-        }]
-        : buildOfficialTextBlocks(hydratedRankedMatches);
-      answerMode = 'database_text_exact_overview';
-    } else {
-      if (!fastDatabaseAnswers) {
-        answerBlocks = await generateStructuredOfficialAnswerWithOllama({
-          question,
-          officialText: officialAnswer,
-          detailLevel: 'compact'
+    if (answerBlocks && isDefinitionStyleQuestion(question) && !useCompleteDocumentOverview) {
+      answerBlocks = trimDefinitionAnswerBlocks(answerBlocks);
+      answerMode = `${answerMode}_brief`;
+    }
+
+    if (!answerBlocks && !fastDatabaseAnswers) {
+      const officialSummary = await generateOfficialTextSummaryWithOllama({
+        question,
+        officialText: officialAnswer
+      });
+
+      if (officialSummary) {
+        const displayOfficialAnswer = getConciseOfficialExcerpt(officialAnswer);
+
+        answerBlocks = buildHybridOfficialBlocks({
+          summary: officialSummary,
+          officialBlocks: displayOfficialAnswer.text
+            ? [{
+              type: 'preformatted',
+              text: displayOfficialAnswer.text,
+              fullText: displayOfficialAnswer.fullText,
+              isTruncated: displayOfficialAnswer.isTruncated
+            }]
+            : buildOfficialTextBlocks(hydratedRankedMatches)
         });
-        answerMode = answerBlocks
-          ? 'database_text_structured_with_ollama'
-          : 'database_text';
+        answerMode = 'database_text_with_ollama_summary';
       }
     }
 
     if (!answerBlocks) {
-      const officialSummary = fastDatabaseAnswers
-        ? null
-        : await generateOfficialTextSummaryWithOllama({
-          question,
-          officialText: officialAnswer
-        });
-      const displayOfficialAnswer = officialSummary
-        ? getConciseOfficialExcerpt(officialAnswer)
-        : getTruncatedText(officialAnswer, useCompleteDocumentOverview ? 5200 : 2200);
+      const displayOfficialAnswer = getTruncatedText(officialAnswer, useCompleteDocumentOverview ? 5200 : 1200);
       const officialBlocks = displayOfficialAnswer.text
         ? [{
           type: 'preformatted',
@@ -1450,10 +1481,10 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
         : buildOfficialTextBlocks(hydratedRankedMatches);
 
       answerBlocks = buildHybridOfficialBlocks({
-        summary: officialSummary,
+        summary: '',
         officialBlocks
       });
-      answerMode = officialSummary ? 'database_text_with_ollama_summary' : 'database_text';
+      answerMode = 'database_text_fallback_excerpt';
     }
 
     return {
@@ -1472,7 +1503,7 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
     };
   }
 
-  return buildNoMatchAnswer({ question });
+  return buildNoOfficialMatchAnswer();
 }
 
 module.exports = {
