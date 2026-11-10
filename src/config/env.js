@@ -16,6 +16,9 @@ module.exports = {
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
   ollamaModel: process.env.OLLAMA_MODEL || 'qwen3:8b',
   ollamaEmbedModel: process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text',
+  // Qwen3 "thinks" silently before answering, which delayed the first word by ~20s
+  // and could use up the whole answer budget. Off unless OLLAMA_THINK=true.
+  ollamaThink: process.env.OLLAMA_THINK === 'true',
   ollamaRequestTimeoutMs: Number(process.env.OLLAMA_REQUEST_TIMEOUT_MS || 120000),
   qdrantEnabled: process.env.QDRANT_ENABLED === 'true',
   qdrantUrl: process.env.QDRANT_URL || 'http://localhost:6333',

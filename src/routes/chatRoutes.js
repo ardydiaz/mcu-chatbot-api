@@ -1,7 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const { jwtSecret } = require('../config/env');
-const { askQuestion, getTopics } = require('../controllers/chatController');
+const { askQuestion, askQuestionStream, getTopics } = require('../controllers/chatController');
 
 const router = express.Router();
 const chatRateBuckets = new Map();
@@ -159,5 +159,38 @@ router.get('/topics', optionalAuthenticate, getTopics);
  *         description: Too many chat requests
  */
 router.post('/ask', optionalAuthenticate, chatRateLimit, duplicateQuestionLimit, expensiveChatLimit, askQuestion);
+
+/**
+ * @swagger
+ * /api/chat/ask-stream:
+ *   post:
+ *     summary: Ask a question and stream the answer while it is generated
+ *     description: >
+ *       Same request body as /api/chat/ask. Responds with newline-delimited JSON
+ *       (application/x-ndjson). Each line is one event - "partial" (answerBlocks so far),
+ *       "final" (data, same shape as /api/chat/ask) or "error" (message).
+ *     tags:
+ *       - Chat
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - message
+ *             properties:
+ *               message:
+ *                 type: string
+ *                 maxLength: 2000
+ *     responses:
+ *       200:
+ *         description: Stream of answer events
+ *       413:
+ *         description: Message is too long
+ *       429:
+ *         description: Too many chat requests
+ */
+router.post('/ask-stream', optionalAuthenticate, chatRateLimit, duplicateQuestionLimit, expensiveChatLimit, askQuestionStream);
 
 module.exports = router;

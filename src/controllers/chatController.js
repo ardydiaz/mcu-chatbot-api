@@ -133,41 +133,62 @@ async function saveChatLog({ userId, userAccountId, message, response }) {
   }
 }
 
+// Validates the chat request. Returns { message, scope } or sends an error response and returns null.
+async function readChatRequest(req, res) {
+  const message = sanitizeQuestionInput(req.body.message);
+  const scope = await normalizeScope(req.body.scope || req.query.scope);
+  const embedOrigin = req.body.embedOrigin || req.query.embedOrigin;
+  const embedToken = req.body.embedToken || req.query.embedToken;
+  const isEmbed = isEmbedRequest(req.body.isEmbed || req.query.isEmbed);
+
+  if (!message) {
+    res.status(400).json({ message: 'Message is required.' });
+    return null;
+  }
+
+  if (message.length > MAX_CHAT_MESSAGE_LENGTH) {
+    res.status(413).json({ message: `Message is too long. Please keep it under ${MAX_CHAT_MESSAGE_LENGTH} characters.` });
+    return null;
+  }
+
+  if (isEmbed && !await isAllowedEmbedOrigin(scope, embedOrigin, embedToken)) {
+    res.status(403).json({ message: getForbiddenEmbedMessage() });
+    return null;
+  }
+
+  return { message, scope };
+}
+
+async function logChatExchange(user, message, answer) {
+  let userId = null;
+
+  try {
+    userId = await getChatLogUserId(user);
+  } catch (error) {
+    console.warn('Chat log user was not resolved:', error.message);
+  }
+
+  await saveChatLog({
+    userId,
+    userAccountId: getChatLogUserAccountId(user),
+    message,
+    response: answer
+  });
+}
+
 async function askQuestion(req, res, next) {
   try {
-    const message = sanitizeQuestionInput(req.body.message);
-    const scope = await normalizeScope(req.body.scope || req.query.scope);
-    const embedOrigin = req.body.embedOrigin || req.query.embedOrigin;
-    const embedToken = req.body.embedToken || req.query.embedToken;
-    const isEmbed = isEmbedRequest(req.body.isEmbed || req.query.isEmbed);
-    if (!message) {
-      return res.status(400).json({ message: 'Message is required.' });
+    const request = await readChatRequest(req, res);
+
+    if (!request) {
+      return undefined;
     }
 
-    if (message.length > MAX_CHAT_MESSAGE_LENGTH) {
-      return res.status(413).json({ message: `Message is too long. Please keep it under ${MAX_CHAT_MESSAGE_LENGTH} characters.` });
-    }
-
-    if (isEmbed && !await isAllowedEmbedOrigin(scope, embedOrigin, embedToken)) {
-      return res.status(403).json({ message: getForbiddenEmbedMessage() });
-    }
-
+    const { message, scope } = request;
     const result = getSimpleChatReply(message)
       || await searchDocuments(message, { scope });
-    let userId = null;
 
-    try {
-      userId = await getChatLogUserId(req.user);
-    } catch (error) {
-      console.warn('Chat log user was not resolved:', error.message);
-    }
-
-    await saveChatLog({
-      userId,
-      userAccountId: getChatLogUserAccountId(req.user),
-      message,
-      response: result.answer
-    });
+    await logChatExchange(req.user, message, result.answer);
 
     return res.json({
       question: message,
@@ -176,6 +197,69 @@ async function askQuestion(req, res, next) {
   } catch (error) {
     return next(error);
   }
+}
+
+// Same as askQuestion, but streams the answer as newline-delimited JSON events:
+//   {"type":"partial","answerBlocks":[...]}   repeated while the AI writes
+//   {"type":"final","data":{...}}             the complete result (same shape as /ask)
+//   {"type":"error","message":"..."}          if something fails mid-stream
+async function askQuestionStream(req, res, next) {
+  let request;
+
+  try {
+    request = await readChatRequest(req, res);
+  } catch (error) {
+    return next(error);
+  }
+
+  if (!request) {
+    return undefined;
+  }
+
+  const { message, scope } = request;
+  const abortController = new AbortController();
+  let isClientGone = false;
+
+  res.on('close', () => {
+    if (!res.writableFinished) {
+      isClientGone = true;
+      abortController.abort();
+    }
+  });
+
+  res.status(200);
+  res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  const sendEvent = (event) => {
+    if (!isClientGone && !res.writableEnded) {
+      res.write(`${JSON.stringify(event)}\n`);
+    }
+  };
+
+  try {
+    const result = getSimpleChatReply(message)
+      || await searchDocuments(message, {
+        scope,
+        signal: abortController.signal,
+        onPartialAnswer: (answerBlocks) => sendEvent({ type: 'partial', answerBlocks })
+      });
+
+    sendEvent({ type: 'final', data: { question: message, ...result } });
+    res.end();
+
+    if (!isClientGone) {
+      await logChatExchange(req.user, message, result.answer);
+    }
+  } catch (error) {
+    console.error(error);
+    sendEvent({ type: 'error', message: 'The chatbot encountered a server error. Please try again.' });
+    res.end();
+  }
+
+  return undefined;
 }
 
 async function getTopics(req, res, next) {
@@ -198,5 +282,6 @@ async function getTopics(req, res, next) {
 
 module.exports = {
   getTopics,
-  askQuestion
+  askQuestion,
+  askQuestionStream
 };

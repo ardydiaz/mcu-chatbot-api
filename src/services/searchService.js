@@ -1204,7 +1204,9 @@ function trimDefinitionAnswerBlocks(blocks) {
   return trimmedBlocks.length > 0 ? trimmedBlocks : blocks.slice(0, 4);
 }
 
-async function searchDocuments(question, { scope = 'general' } = {}) {
+// `onPartialAnswer(blocks)`, when given, receives the AI answer while it is still
+// being generated. `signal` cancels generation (e.g. the user closed the page).
+async function searchDocuments(question, { scope = 'general', onPartialAnswer, signal } = {}) {
   const likeQuery = `%${question}%`;
   const terms = getSearchTerms(question);
   const normalizedQuestion = normalizeText(question);
@@ -1428,11 +1430,16 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
     });
     let answerBlocks = null;
     let answerMode = 'database_text';
+    const shouldTrimDefinitionAnswer = isDefinitionStyleQuestion(question) && !useCompleteDocumentOverview;
 
     answerBlocks = await generateStructuredOfficialAnswerWithOllama({
       question,
       officialText: officialAnswer,
-      detailLevel: useCompleteDocumentOverview ? 'complete' : 'compact'
+      detailLevel: useCompleteDocumentOverview ? 'complete' : 'compact',
+      signal,
+      onPartial: typeof onPartialAnswer === 'function'
+        ? (blocks) => onPartialAnswer(shouldTrimDefinitionAnswer ? trimDefinitionAnswerBlocks(blocks) : blocks)
+        : undefined
     });
     answerMode = answerBlocks
       ? useCompleteDocumentOverview
@@ -1440,7 +1447,7 @@ async function searchDocuments(question, { scope = 'general' } = {}) {
         : 'database_text_structured_with_ollama'
       : 'database_text';
 
-    if (answerBlocks && isDefinitionStyleQuestion(question) && !useCompleteDocumentOverview) {
+    if (answerBlocks && shouldTrimDefinitionAnswer) {
       answerBlocks = trimDefinitionAnswerBlocks(answerBlocks);
       answerMode = `${answerMode}_brief`;
     }

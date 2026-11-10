@@ -3,7 +3,8 @@ const {
   ollamaEmbedModel,
   ollamaModel,
   ollamaRequestTimeoutMs,
-  ollamaEnabled
+  ollamaEnabled,
+  ollamaThink
 } = require('../config/env');
 
 function cleanText(value) {
@@ -32,6 +33,167 @@ function parseJsonResponse(value) {
   } catch {
     return null;
   }
+}
+
+// --- Streaming helpers --------------------------------------------------------
+// The model is asked for JSON, so while it streams we only ever have an
+// unfinished JSON document. These helpers close it off so it can be parsed and
+// shown to the user before generation completes.
+
+// Closes any open string, array, or object at the end of a JSON prefix.
+function closeJsonPrefix(prefix) {
+  const stack = [];
+  let inString = false;
+  let isEscaped = false;
+
+  for (const char of prefix) {
+    if (inString) {
+      if (isEscaped) {
+        isEscaped = false;
+      } else if (char === '\\') {
+        isEscaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+    } else if (char === '{') {
+      stack.push('}');
+    } else if (char === '[') {
+      stack.push(']');
+    } else if (char === '}' || char === ']') {
+      stack.pop();
+    }
+  }
+
+  let closed = prefix;
+
+  if (inString) {
+    if (isEscaped) {
+      closed = closed.slice(0, -1);
+    }
+    closed += '"';
+  }
+
+  closed = closed.replace(/\s+$/, '');
+
+  if (closed.endsWith(',')) {
+    closed = closed.slice(0, -1);
+  } else if (closed.endsWith(':')) {
+    closed += 'null';
+  }
+
+  return closed + stack.reverse().join('');
+}
+
+// Best-effort parse of an incomplete JSON object. Returns null when nothing usable yet.
+function parsePartialJson(value) {
+  const text = String(value || '').replace(/<think>[\s\S]*?(<\/think>|$)/gi, '');
+  const start = text.indexOf('{');
+
+  if (start === -1) {
+    return null;
+  }
+
+  const source = text.slice(start);
+  const tryParse = (prefix) => {
+    try {
+      return JSON.parse(closeJsonPrefix(prefix));
+    } catch {
+      return undefined;
+    }
+  };
+
+  const direct = tryParse(source);
+
+  if (direct !== undefined) {
+    return direct;
+  }
+
+  // The tail is something like a half-written key or literal: back up to the
+  // previous separator and try again (bounded so this stays cheap).
+  let attempts = 0;
+
+  for (let index = source.length - 1; index > 0 && attempts < 25; index -= 1) {
+    const char = source[index];
+
+    if (char !== ',' && char !== '{' && char !== '[') {
+      continue;
+    }
+
+    attempts += 1;
+    const parsed = tryParse(char === ',' ? source.slice(0, index) : source.slice(0, index + 1));
+
+    if (parsed !== undefined) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+// Calls Ollama /api/generate. With `onText`, the response is streamed and
+// `onText` receives the accumulated text after every chunk.
+async function requestOllamaGenerate(body, { signal, onText } = {}) {
+  const isStreaming = typeof onText === 'function';
+  const response = await fetch(new URL('/api/generate', ollamaBaseUrl), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ ...body, stream: isStreaming, think: ollamaThink }),
+    signal
+  });
+
+  if (!response.ok) {
+    throw new Error(`Ollama responded with status ${response.status}.`);
+  }
+
+  if (!isStreaming) {
+    const data = await response.json();
+    return data.response;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+  let accumulated = '';
+
+  const handleLine = (line) => {
+    if (!line.trim()) {
+      return;
+    }
+
+    const chunk = JSON.parse(line);
+
+    if (chunk.error) {
+      throw new Error(`Ollama stream error: ${chunk.error}`);
+    }
+
+    if (chunk.response) {
+      accumulated += chunk.response;
+      onText(accumulated);
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    buffered += decoder.decode(value, { stream: true });
+    const lines = buffered.split('\n');
+    buffered = lines.pop();
+    lines.forEach(handleLine);
+  }
+
+  handleLine(buffered + decoder.decode());
+  return accumulated;
 }
 
 function formatGeneratedAnswer(data) {
@@ -225,6 +387,8 @@ function buildStructuredOfficialPrompt({ question, officialText, detailLevel = '
     '- section.type must be "paragraph" or "list".',
     '- For list sections, put each item in items and leave content empty.',
     '- For paragraph sections, put text in content and leave items empty.',
+    '- Steps, procedures, and numbered instructions must always be a list section with one step per item. Never write them inline in a paragraph like "1. ... 2. ...".',
+    '- Do not put numbers or bullet characters at the start of list items; the app numbers them.',
     '- Do not include Markdown fences, citations, source labels, or hidden reasoning.',
     '',
     `Student question: ${question}`,
@@ -296,6 +460,7 @@ async function generateAnswerWithOllama({ question, matches }) {
         model: ollamaModel,
         prompt: buildPrompt({ question, matches }),
         stream: false,
+        think: ollamaThink,
         format: 'json',
         options: {
           temperature: 0.2,
@@ -338,6 +503,7 @@ async function generateOfficialTextSummaryWithOllama({ question, officialText })
         model: ollamaModel,
         prompt: buildOfficialSummaryPrompt({ question, officialText }),
         stream: false,
+        think: ollamaThink,
         format: 'json',
         options: {
           temperature: 0.1,
@@ -362,49 +528,72 @@ async function generateOfficialTextSummaryWithOllama({ question, officialText })
   }
 }
 
-async function generateStructuredOfficialAnswerWithOllama({ question, officialText, detailLevel = 'compact' }) {
+const PARTIAL_ANSWER_INTERVAL_MS = 80;
+
+// With `onPartial`, the answer is streamed: `onPartial(blocks)` is called with
+// the answer-so-far (same block format as the final result) while Ollama writes.
+async function generateStructuredOfficialAnswerWithOllama({
+  question,
+  officialText,
+  detailLevel = 'compact',
+  onPartial,
+  signal
+}) {
   if (!ollamaEnabled || !officialText) {
     return null;
   }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), ollamaRequestTimeoutMs);
+  const abortFromCaller = () => controller.abort();
+  signal?.addEventListener('abort', abortFromCaller);
+
+  let lastPartialAt = 0;
+  let lastPartialKey = '';
+  const emitPartial = typeof onPartial === 'function'
+    ? (accumulatedText) => {
+      const now = Date.now();
+
+      if (now - lastPartialAt < PARTIAL_ANSWER_INTERVAL_MS) {
+        return;
+      }
+
+      const blocks = formatStructuredOfficialAnswer(parsePartialJson(accumulatedText), { detailLevel });
+      const key = blocks ? JSON.stringify(blocks) : '';
+
+      if (!blocks || key === lastPartialKey) {
+        return;
+      }
+
+      lastPartialAt = now;
+      lastPartialKey = key;
+      onPartial(blocks);
+    }
+    : undefined;
 
   try {
-    const response = await fetch(new URL('/api/generate', ollamaBaseUrl), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: ollamaModel,
-        prompt: buildStructuredOfficialPrompt({
-          question,
-          officialText: cleanAnswerText(officialText).slice(0, detailLevel === 'complete' ? 24000 : 14000),
-          detailLevel
-        }),
-        stream: false,
-        format: 'json',
-        options: {
-          temperature: 0.12,
-          top_p: 0.8,
-          num_predict: detailLevel === 'complete' ? 1800 : 900
-        }
+    const responseText = await requestOllamaGenerate({
+      model: ollamaModel,
+      prompt: buildStructuredOfficialPrompt({
+        question,
+        officialText: cleanAnswerText(officialText).slice(0, detailLevel === 'complete' ? 24000 : 14000),
+        detailLevel
       }),
-      signal: controller.signal
-    });
+      format: 'json',
+      options: {
+        temperature: 0.12,
+        top_p: 0.8,
+        num_predict: detailLevel === 'complete' ? 1800 : 900
+      }
+    }, { signal: controller.signal, onText: emitPartial });
 
-    if (!response.ok) {
-      throw new Error(`Ollama responded with status ${response.status}.`);
-    }
-
-    const data = await response.json();
-    return formatStructuredOfficialAnswer(parseJsonResponse(data.response), { detailLevel });
+    return formatStructuredOfficialAnswer(parseJsonResponse(responseText), { detailLevel });
   } catch (error) {
     console.warn(`Ollama structured official answer failed: ${error.message}`);
     return null;
   } finally {
     clearTimeout(timeout);
+    signal?.removeEventListener('abort', abortFromCaller);
   }
 }
 
@@ -426,6 +615,7 @@ async function generateConversationalAnswerWithOllama({ question, conversationCo
         model: ollamaModel,
         prompt: buildConversationalAnswerPrompt({ question, conversationContext }),
         stream: false,
+        think: ollamaThink,
         format: 'json',
         options: {
           temperature: 0.35,
@@ -468,6 +658,7 @@ async function generateGeneralAnswerWithOllama({ question }) {
         model: ollamaModel,
         prompt: buildGeneralAnswerPrompt({ question }),
         stream: false,
+        think: ollamaThink,
         format: 'json',
         options: {
           temperature: 0.4,
@@ -555,7 +746,8 @@ module.exports = {
   generateEmbeddingWithOllama,
   generateOfficialTextSummaryWithOllama,
   generateStructuredOfficialAnswerWithOllama,
-  generateGeneralAnswerWithOllama
+  generateGeneralAnswerWithOllama,
+  parsePartialJson
 };
 
 // END
