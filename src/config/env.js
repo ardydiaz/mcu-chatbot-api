@@ -14,7 +14,7 @@ module.exports = {
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '1d',
   ollamaEnabled: process.env.OLLAMA_ENABLED !== 'false',
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
-  ollamaModel: process.env.OLLAMA_MODEL || 'qwen3:8b',
+  ollamaModel: process.env.OLLAMA_MODEL || 'qwen3:4b',
   ollamaEmbedModel: process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text',
   // Qwen3 "thinks" silently before answering, which delayed the first word by ~20s
   // and could use up the whole answer budget. Off unless OLLAMA_THINK=true.
