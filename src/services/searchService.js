@@ -2,6 +2,7 @@ const path = require('path');
 const pool = require('../utils/db');
 const { fastDatabaseAnswers } = require('../config/env');
 const {
+  generateGeneralAnswerWithOllama,
   generateOfficialTextSummaryWithOllama,
   generateStructuredOfficialAnswerWithOllama
 } = require('./ollamaService');
@@ -1204,9 +1205,48 @@ function trimDefinitionAnswerBlocks(blocks) {
   return trimmedBlocks.length > 0 ? trimmedBlocks : blocks.slice(0, 4);
 }
 
+// Questions about official MCU facts (officials, fees, deadlines, contacts...) must
+// not get an AI-invented answer, so they keep the "contact the office" reply.
+function needsOfficialSource(question) {
+  return isLeadershipQuestion(question)
+    || isUniversitySpecificFactQuestion(question)
+    || isAddressQuestion(question)
+    || isContactQuestion(question);
+}
+
+// Answers from the official documents first. When they do not cover the question,
+// falls back to a general ChatGPT-style answer (unless it needs an official source).
 // `onPartialAnswer(blocks)`, when given, receives the AI answer while it is still
 // being generated. `signal` cancels generation (e.g. the user closed the page).
-async function searchDocuments(question, { scope = 'general', onPartialAnswer, signal } = {}) {
+// `conversationContext` is the recent chat ([{ role, text }]) for follow-up questions.
+async function searchDocuments(question, { scope = 'general', onPartialAnswer, signal, conversationContext = [] } = {}) {
+  const officialResult = await searchOfficialDocuments(question, { scope, onPartialAnswer, signal });
+
+  if (officialResult.answerMode !== 'no_official_document_match' || needsOfficialSource(question)) {
+    return officialResult;
+  }
+
+  const generalBlocks = await generateGeneralAnswerWithOllama({
+    question,
+    conversationContext,
+    signal,
+    onPartial: onPartialAnswer
+  });
+
+  if (!generalBlocks) {
+    return officialResult;
+  }
+
+  return {
+    answer: blocksToText(generalBlocks),
+    answerBlocks: generalBlocks,
+    answerMode: 'general_ai',
+    images: [],
+    sources: []
+  };
+}
+
+async function searchOfficialDocuments(question, { scope = 'general', onPartialAnswer, signal } = {}) {
   const likeQuery = `%${question}%`;
   const terms = getSearchTerms(question);
   const normalizedQuestion = normalizeText(question);

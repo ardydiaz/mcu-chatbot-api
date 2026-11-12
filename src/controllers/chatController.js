@@ -133,6 +133,22 @@ async function saveChatLog({ userId, userAccountId, message, response }) {
   }
 }
 
+// Recent chat sent by the frontend for follow-up questions: keep the last 6 turns, trimmed.
+function sanitizeConversationContext(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((item) => item && ['user', 'assistant'].includes(item.role))
+    .slice(-6)
+    .map((item) => ({
+      role: item.role,
+      text: sanitizeQuestionInput(item.text).slice(0, 1200)
+    }))
+    .filter((item) => item.text);
+}
+
 // Validates the chat request. Returns { message, scope } or sends an error response and returns null.
 async function readChatRequest(req, res) {
   const message = sanitizeQuestionInput(req.body.message);
@@ -156,7 +172,7 @@ async function readChatRequest(req, res) {
     return null;
   }
 
-  return { message, scope };
+  return { message, scope, conversationContext: sanitizeConversationContext(req.body.conversationContext) };
 }
 
 async function logChatExchange(user, message, answer) {
@@ -184,9 +200,9 @@ async function askQuestion(req, res, next) {
       return undefined;
     }
 
-    const { message, scope } = request;
+    const { message, scope, conversationContext } = request;
     const result = getSimpleChatReply(message)
-      || await searchDocuments(message, { scope });
+      || await searchDocuments(message, { scope, conversationContext });
 
     await logChatExchange(req.user, message, result.answer);
 
@@ -216,7 +232,7 @@ async function askQuestionStream(req, res, next) {
     return undefined;
   }
 
-  const { message, scope } = request;
+  const { message, scope, conversationContext } = request;
   const abortController = new AbortController();
   let isClientGone = false;
 
@@ -243,6 +259,7 @@ async function askQuestionStream(req, res, next) {
     const result = getSimpleChatReply(message)
       || await searchDocuments(message, {
         scope,
+        conversationContext,
         signal: abortController.signal,
         onPartialAnswer: (answerBlocks) => sendEvent({ type: 'partial', answerBlocks })
       });

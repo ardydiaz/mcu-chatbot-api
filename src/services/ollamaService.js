@@ -283,6 +283,19 @@ function formatStructuredOfficialAnswer(data, { detailLevel = 'compact' } = {}) 
       });
     }
 
+    if (type === 'code') {
+      // Keep line breaks and indentation; only trim the ends.
+      const code = String(section.content || '').replace(/\r\n/g, '\n').replace(/^\n+|\s+$/g, '').slice(0, 4000);
+
+      if (code) {
+        blocks.push({
+          type: 'code',
+          text: code
+        });
+      }
+      return;
+    }
+
     if ((type === 'list' || items.length > 0) && items.length > 0) {
       blocks.push({
         type: 'list',
@@ -398,18 +411,30 @@ function buildStructuredOfficialPrompt({ question, officialText, detailLevel = '
   ].join('\n');
 }
 
-function buildGeneralAnswerPrompt({ question }) {
+// General (ChatGPT-style) answers for questions the official documents do not cover.
+// Uses the same JSON shape as structured official answers so the app can stream and
+// render it the same way (summary, headings, lists).
+function buildGeneralAnswerPrompt({ question, conversationContext = [] }) {
+  const conversationText = buildConversationText(conversationContext);
+
   return [
-    'You are MCU Guide in General AI Mode.',
-    'The uploaded official university documents did not contain an answer to the user question.',
-    'Answer as a helpful general AI assistant, not as an official MCU policy source.',
-    'Do not claim that the answer comes from MCU documents.',
-    'If the question asks about a university-specific fact, policy, fee, enrollment step, grade, schedule, account, office, requirement, deadline, contact detail, or current leader, answer only as general guidance and clearly recommend official confirmation.',
-    'If you are uncertain or the answer may have changed, say you cannot verify it from uploaded documents and recommend checking the official MCU website or office.',
-    'Be useful and conversational. Do not simply refuse unless the question is unsafe or impossible to answer.',
+    'You are Centralino Virtual Assistant, the friendly AI assistant of Manila Central University (MCU), in General AI Mode.',
+    'The official MCU documents do not cover this question, so answer it like a knowledgeable general AI assistant such as ChatGPT.',
+    'Explain clearly and accurately for a university student. Match the length to the question: a short answer for simple questions, and a fuller explanation with sections for broad topics.',
+    'Use examples when they help understanding. Put any code in its own section with type "code", the full code in content (use \\n for line breaks), and items empty. Never split code into list items.',
+    'Answer in the same language the user wrote in (for example English or Filipino).',
+    'Never invent MCU-specific facts such as names of officials, fees, dates, schedules, policies, requirements, or contact details. If the question needs one, say you cannot confirm it and suggest checking the official MCU website or the appropriate office.',
+    'Do not claim the answer comes from MCU documents.',
+    'If the latest question is a follow-up (for example "explain more" or "what about that?"), use the recent conversation to understand it.',
     'Return only valid JSON with this exact shape:',
-    '{ "answer": "clear helpful answer in 2-5 sentences" }',
+    '{ "summary": "1-3 sentence direct answer", "sections": [ { "title": "Section title", "type": "paragraph", "content": "clear paragraph text", "items": [] }, { "title": "Section title", "type": "list", "content": "", "items": ["item 1", "item 2"] } ] }',
+    'Rules:',
+    '- Use 0 sections for simple questions and at most 5 sections for broad topics.',
+    '- section.type must be "paragraph", "list", or "code". Lists hold items and leave content empty; paragraphs and code hold content and leave items empty.',
+    '- Steps and numbered instructions must be a list section, one step per item, without numbers in the item text.',
+    '- Do not include Markdown fences, citations, or hidden reasoning.',
     '',
+    ...(conversationText ? ['Recent conversation:', conversationText, ''] : []),
     `User question: ${question}`
   ].join('\n');
 }
@@ -640,46 +665,69 @@ async function generateConversationalAnswerWithOllama({ question, conversationCo
   }
 }
 
-async function generateGeneralAnswerWithOllama({ question }) {
+// Returns answer blocks (same format as structured official answers), or null on failure.
+// With `onPartial`, the answer is streamed while it is generated.
+async function generateGeneralAnswerWithOllama({ question, conversationContext = [], onPartial, signal }) {
   if (!ollamaEnabled || !question) {
     return null;
   }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), ollamaRequestTimeoutMs);
+  const abortFromCaller = () => controller.abort();
+  signal?.addEventListener('abort', abortFromCaller);
+
+  let lastPartialAt = 0;
+  let lastPartialKey = '';
+  const emitPartial = typeof onPartial === 'function'
+    ? (accumulatedText) => {
+      const now = Date.now();
+
+      if (now - lastPartialAt < PARTIAL_ANSWER_INTERVAL_MS) {
+        return;
+      }
+
+      const blocks = formatStructuredOfficialAnswer(parsePartialJson(accumulatedText), { detailLevel: 'complete' });
+      const key = blocks ? JSON.stringify(blocks) : '';
+
+      if (!blocks || key === lastPartialKey) {
+        return;
+      }
+
+      lastPartialAt = now;
+      lastPartialKey = key;
+      onPartial(blocks);
+    }
+    : undefined;
 
   try {
-    const response = await fetch(new URL('/api/generate', ollamaBaseUrl), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: ollamaModel,
-        prompt: buildGeneralAnswerPrompt({ question }),
-        stream: false,
-        think: ollamaThink,
-        format: 'json',
-        options: {
-          temperature: 0.4,
-          top_p: 0.9,
-          num_predict: 450
-        }
-      }),
-      signal: controller.signal
-    });
+    const responseText = await requestOllamaGenerate({
+      model: ollamaModel,
+      prompt: buildGeneralAnswerPrompt({ question, conversationContext }),
+      format: 'json',
+      options: {
+        temperature: 0.4,
+        top_p: 0.9,
+        num_predict: 1200
+      }
+    }, { signal: controller.signal, onText: emitPartial });
 
-    if (!response.ok) {
-      throw new Error(`Ollama responded with status ${response.status}.`);
+    const parsed = parseJsonResponse(responseText);
+    const blocks = formatStructuredOfficialAnswer(parsed, { detailLevel: 'complete' });
+
+    if (blocks) {
+      return blocks;
     }
 
-    const data = await response.json();
-    return formatGeneralAnswer(parseJsonResponse(data.response)) || cleanAnswerText(data.response);
+    // The model answered in an older shape ({ "answer": "..." }) or plain text.
+    const fallbackText = formatGeneralAnswer(parsed) || cleanAnswerText(responseText);
+    return fallbackText ? [{ type: 'paragraph', text: fallbackText }] : null;
   } catch (error) {
     console.warn(`Ollama general answer failed: ${error.message}`);
     return null;
   } finally {
     clearTimeout(timeout);
+    signal?.removeEventListener('abort', abortFromCaller);
   }
 }
 
