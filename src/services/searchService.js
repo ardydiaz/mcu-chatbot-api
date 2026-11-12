@@ -283,10 +283,12 @@ function scoreMatch(match, terms, question = '') {
   const firstLines = content.split('\n').slice(0, 8).join(' ');
   const termHits = terms.filter((term) => content.includes(term)).length;
   const headingHits = terms.filter((term) => firstLines.includes(term)).length;
+  const title = normalizeText(match.title);
+  const titleHits = terms.filter((term) => title.includes(term)).length;
   const tocPenalty = /contents|\.{5,}| \d+-\d+/.test(firstLines) ? 5 : 0;
   const semanticScore = Number(match.semanticScore || 0) * 10;
 
-  return (headingHits * 5) + termHits + semanticScore + getIntentBoost(match, question) - tocPenalty;
+  return (titleHits * 4) + (headingHits * 5) + termHits + semanticScore + getIntentBoost(match, question) - tocPenalty;
 }
 
 function getTermCoverage(match, terms) {
@@ -1219,8 +1221,46 @@ function needsOfficialSource(question) {
 // `onPartialAnswer(blocks)`, when given, receives the AI answer while it is still
 // being generated. `signal` cancels generation (e.g. the user closed the page).
 // `conversationContext` is the recent chat ([{ role, text }]) for follow-up questions.
+// Website pages imported by scripts/importWebsite.js have a source_url. Their sources
+// link to the page on mcu.edu.ph instead of a file preview.
+async function attachWebsiteSourceUrls(result) {
+  const documentIds = [...new Set((result.sources || []).map((source) => Number(source.documentId)).filter(Boolean))];
+
+  if (!documentIds.length) {
+    return result;
+  }
+
+  try {
+    const [rows] = await pool.execute(
+      `SELECT id, source_url FROM documents WHERE id IN (${documentIds.map(() => '?').join(',')}) AND source_url IS NOT NULL`,
+      documentIds
+    );
+    const sourceUrlById = new Map(rows.map((row) => [Number(row.id), row.source_url]));
+
+    if (!sourceUrlById.size) {
+      return result;
+    }
+
+    return {
+      ...result,
+      sources: result.sources.map((source) => {
+        const sourceUrl = sourceUrlById.get(Number(source.documentId));
+
+        return sourceUrl
+          ? { ...source, sourceUrl, previewFileUrl: null, previewType: 'website' }
+          : source;
+      })
+    };
+  } catch (error) {
+    console.warn(`Website source lookup failed: ${error.message}`);
+    return result;
+  }
+}
+
 async function searchDocuments(question, { scope = 'general', onPartialAnswer, signal, conversationContext = [] } = {}) {
-  const officialResult = await searchOfficialDocuments(question, { scope, onPartialAnswer, signal });
+  const officialResult = await attachWebsiteSourceUrls(
+    await searchOfficialDocuments(question, { scope, onPartialAnswer, signal })
+  );
 
   if (officialResult.answerMode !== 'no_official_document_match' || needsOfficialSource(question)) {
     return officialResult;
@@ -1300,6 +1340,8 @@ async function searchOfficialDocuments(question, { scope = 'general', onPartialA
     )
     : [[]];
 
+  // Ordered by relevance: with many documents (e.g. the imported website pages)
+  // an unordered LIMIT would drop the best pages before ranking.
   const [broadRows] = await pool.execute(
     `SELECT dt.document_id, dt.page_number, dt.content, d.title
      FROM document_text dt
@@ -1309,8 +1351,9 @@ async function searchOfficialDocuments(question, { scope = 'general', onPartialA
          MATCH(dt.content) AGAINST (? IN NATURAL LANGUAGE MODE)
          OR dt.content LIKE ?
        )
-     LIMIT 25`,
-    [scope, question, likeQuery]
+     ORDER BY (dt.content LIKE ?) DESC, MATCH(dt.content) AGAINST (? IN NATURAL LANGUAGE MODE) DESC
+     LIMIT 30`,
+    [scope, question, likeQuery, likeQuery, question]
   );
   const shouldUseSemanticSearch = titleRows.length === 0 && exactPhraseRows.length === 0 && broadRows.length === 0;
   const semanticRows = shouldUseSemanticSearch

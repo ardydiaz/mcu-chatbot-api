@@ -123,6 +123,8 @@ async function listLibraryDocuments(req, res, next) {
        LEFT JOIN users login_user ON login_user.id = d.uploaded_by_user_id
        LEFT JOIN api_account api_user ON api_user.id = d.uploaded_by
        LEFT JOIN document_images di ON di.document_id = d.id
+       -- Pages imported from mcu.edu.ph are searchable but stay out of the library list.
+       WHERE d.source_url IS NULL
        GROUP BY d.id, d.title, d.file_path, d.preview_file_path, d.site_scope, d.suggested_prompt, d.created_at, login_user.name, api_user.name
        ORDER BY d.created_at DESC`
     );

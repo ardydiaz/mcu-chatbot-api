@@ -3,6 +3,3 @@ node_modules/
 storage/uploads/
 storage/images/
 npm-debug.log*
-src/services/searchService.js
-src/services/ollamaService.js
-src/server.js
